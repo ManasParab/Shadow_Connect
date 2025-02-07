@@ -46,13 +46,30 @@ class _ChatScreenState extends State<ChatScreen> {
     return '$date $time';
   }
 
+  Future<void> sendMessage({bool isEncrypted = false}) async {
+    if (_controller.text.isNotEmpty) {
+      String message = _controller.text.trim();
+      if (message.isNotEmpty) {
+        message = message[0].toUpperCase() + message.substring(1);
+      }
+
+      _controller.clear();
+
+      await _sendMessage(
+          message, isEncrypted); // Send message with encryption flag
+
+      _isSendingEncrypted = false; // Reset the encryption flag after sending
+    }
+  }
+
   Future<void> _sendMessage(String message, bool isEncrypted) async {
     final timestamp = DateTime.now().millisecondsSinceEpoch;
 
     String messageToSend = message;
 
     if (isEncrypted) {
-      messageToSend = encryptMessage(message);
+      messageToSend =
+          encryptMessage(message); // Encrypt the message if required
     }
 
     DocumentReference conversationRef =
@@ -70,9 +87,9 @@ class _ChatScreenState extends State<ChatScreen> {
       'isRead': false,
     };
 
-    await messagesRef.add(messageData);
+    await messagesRef.add(messageData); // Add message to Firestore
 
-    // Update conversation document with last message and increment unread count
+    // Update conversation document with the last message and unread count
     await conversationRef.set({
       'participants': [widget.uid, widget.recipientUid],
       'lastMessage': messageToSend,
@@ -81,23 +98,8 @@ class _ChatScreenState extends State<ChatScreen> {
     }, SetOptions(merge: true));
 
     Future.delayed(const Duration(milliseconds: 300), () {
-      _scrollToBottom();
+      _scrollToBottom(); // Scroll to the latest message
     });
-  }
-
-  Future<void> sendMessage() async {
-    if (_controller.text.isNotEmpty) {
-      String message = _controller.text.trim();
-      if (message.isNotEmpty) {
-        message = message[0].toUpperCase() + message.substring(1);
-      }
-
-      _controller.clear();
-
-      _sendMessage(message, _isSendingEncrypted);
-
-      _isSendingEncrypted = false;
-    }
   }
 
   // Encryption function
@@ -186,7 +188,8 @@ class _ChatScreenState extends State<ChatScreen> {
       body: Column(
         children: [
           Expanded(
-            child: StreamBuilder<QuerySnapshot>(
+            child: // Inside the StreamBuilder widget
+                StreamBuilder<QuerySnapshot>(
               stream: _firestore
                   .collection('conversations')
                   .doc(conversationId)
@@ -200,18 +203,11 @@ class _ChatScreenState extends State<ChatScreen> {
 
                 var messages = snapshot.data!.docs;
 
-                // Mark unread messages as read
-                for (var message in messages) {
-                  var data = message.data() as Map<String, dynamic>;
-                  if (data['senderId'] != widget.uid && !data['isRead']) {
-                    message.reference.update({'isRead': true});
-                    _firestore
-                        .collection('conversations')
-                        .doc(conversationId)
-                        .set({
-                      'unreadMessages': {widget.uid: 0}
-                    }, SetOptions(merge: true));
-                  }
+                // Call _scrollToBottom whenever the new messages are loaded
+                if (messages.isNotEmpty) {
+                  Future.delayed(const Duration(milliseconds: 100), () {
+                    _scrollToBottom(); // Ensure the scroll happens after the UI update
+                  });
                 }
 
                 return ListView.builder(
@@ -395,7 +391,8 @@ class _ChatScreenState extends State<ChatScreen> {
                       }
                     },
                     child: FloatingActionButton(
-                      onPressed: () {}, // No need to call sendMessage here
+                      onPressed: () =>
+                          sendMessage(isEncrypted: _isSendingEncrypted),
                       backgroundColor: AppColors.blackIndigoLight,
                       child: const Icon(Icons.send, color: Colors.white),
                     ),

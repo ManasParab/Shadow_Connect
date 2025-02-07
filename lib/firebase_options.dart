@@ -36,10 +36,7 @@ class DefaultFirebaseOptions {
           'you can reconfigure this by running the FlutterFire CLI again.',
         );
       case TargetPlatform.windows:
-        throw UnsupportedError(
-          'DefaultFirebaseOptions have not been configured for windows - '
-          'you can reconfigure this by running the FlutterFire CLI again.',
-        );
+        return windows;
       case TargetPlatform.linux:
         throw UnsupportedError(
           'DefaultFirebaseOptions have not been configured for linux - '
@@ -57,6 +54,16 @@ class DefaultFirebaseOptions {
     appId: '1:977343267818:android:df5084f88db13865e3a893',
     messagingSenderId: '977343267818',
     projectId: 'shadow-connect-fce91',
+    databaseURL: 'https://shadow-connect-fce91-default-rtdb.firebaseio.com',
+    storageBucket: 'shadow-connect-fce91.firebasestorage.app',
+  );
+
+  static const FirebaseOptions windows = FirebaseOptions(
+    apiKey: 'AIzaSyCWK047MglHxEIn6bf3VJUnwJgCuubeWOU',
+    appId: '1:977343267818:web:d86fd04f41412e4ae3a893',
+    messagingSenderId: '977343267818',
+    projectId: 'shadow-connect-fce91',
+    authDomain: 'shadow-connect-fce91.firebaseapp.com',
     databaseURL: 'https://shadow-connect-fce91-default-rtdb.firebaseio.com',
     storageBucket: 'shadow-connect-fce91.firebasestorage.app',
   );

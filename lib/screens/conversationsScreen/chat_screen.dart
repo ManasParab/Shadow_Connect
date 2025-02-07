@@ -5,6 +5,7 @@ import 'dart:convert';
 import 'package:encrypt/encrypt.dart' as encrypt;
 import 'package:local_auth/local_auth.dart';
 import 'package:flutter/services.dart';
+import 'package:intl/intl.dart';
 
 class ChatScreen extends StatefulWidget {
   final String uid;
@@ -37,6 +38,12 @@ class _ChatScreenState extends State<ChatScreen> {
     List<String> ids = [widget.uid, widget.recipientUid];
     ids.sort();
     return ids.join("_");
+  }
+
+  String formatTimestamp(DateTime timestamp) {
+    String date = DateFormat('dd/MM/yy').format(timestamp);
+    String time = DateFormat('hh:mm a').format(timestamp);
+    return '$date $time';
   }
 
   Future<void> _sendMessage(String message, bool isEncrypted) async {
@@ -308,6 +315,24 @@ class _ChatScreenState extends State<ChatScreen> {
                                               ),
                                             ),
                                           ),
+                                        Align(
+                                          alignment: isSender
+                                              ? Alignment.bottomRight
+                                              : Alignment.bottomLeft,
+                                          child: Padding(
+                                            padding:
+                                                const EdgeInsets.only(top: 4.0),
+                                            child: Text(
+                                              formatTimestamp(DateTime
+                                                  .fromMillisecondsSinceEpoch(
+                                                      message['time'])),
+                                              style: const TextStyle(
+                                                fontSize: 12,
+                                                color: Colors.grey,
+                                              ),
+                                            ),
+                                          ),
+                                        ),
                                       ],
                                     ),
                                   ),

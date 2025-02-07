@@ -40,7 +40,7 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   Future<void> _sendMessage(String message, bool isEncrypted) async {
-    final timestamp = DateTime.now();
+    final timestamp = DateTime.now().millisecondsSinceEpoch;
 
     String messageToSend = message;
 
@@ -54,20 +54,23 @@ class _ChatScreenState extends State<ChatScreen> {
     CollectionReference messagesRef = conversationRef.collection('messages');
 
     Map<String, dynamic> messageData = {
-      'messageId': timestamp.millisecondsSinceEpoch.toString(),
+      'messageId': timestamp.toString(),
       'message': messageToSend,
       'senderId': widget.uid,
-      'time': timestamp.toIso8601String(),
+      'time': timestamp,
       'isEncrypted': isEncrypted,
       'isDeleted': false,
+      'isRead': false,
     };
 
     await messagesRef.add(messageData);
 
+    // Update conversation document with last message and increment unread count
     await conversationRef.set({
       'participants': [widget.uid, widget.recipientUid],
       'lastMessage': messageToSend,
-      'lastMessageTime': timestamp.toIso8601String(),
+      'lastMessageTimestamp': timestamp,
+      'unreadMessages': {widget.recipientUid: FieldValue.increment(1)}
     }, SetOptions(merge: true));
 
     Future.delayed(const Duration(milliseconds: 300), () {
@@ -107,33 +110,31 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   Future<bool> _authenticateUser() async {
-  try {
-    final bool canAuthenticate = 
-        await _localAuthentication.canCheckBiometrics || 
-        await _localAuthentication.isDeviceSupported();
+    try {
+      final bool canAuthenticate =
+          await _localAuthentication.canCheckBiometrics ||
+              await _localAuthentication.isDeviceSupported();
 
-    if (!canAuthenticate) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('No authentication methods available'))
+      if (!canAuthenticate) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content: Text('No authentication methods available')));
+        return false;
+      }
+
+      return await _localAuthentication.authenticate(
+        localizedReason: 'Authenticate to view encrypted message',
+        options: const AuthenticationOptions(
+          stickyAuth: true,
+          biometricOnly: false,
+        ),
       );
+    } on PlatformException catch (e) {
+      print('Auth Error: ${e.code} - ${e.message}');
+      ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Authentication error: ${e.code}')));
       return false;
     }
-
-    return await _localAuthentication.authenticate(
-      localizedReason: 'Authenticate to view encrypted message',
-      options: const AuthenticationOptions(
-        stickyAuth: true,
-        biometricOnly: false,
-      ),
-    );
-  } on PlatformException catch (e) {
-    print('Auth Error: ${e.code} - ${e.message}');
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('Authentication error: ${e.code}'))
-    );
-    return false;
   }
-}
 
 // Decryption function
   String decryptMessage(String encryptedMessage) {
@@ -192,8 +193,19 @@ class _ChatScreenState extends State<ChatScreen> {
 
                 var messages = snapshot.data!.docs;
 
-                WidgetsBinding.instance
-                    .addPostFrameCallback((_) => _scrollToBottom());
+                // Mark unread messages as read
+                for (var message in messages) {
+                  var data = message.data() as Map<String, dynamic>;
+                  if (data['senderId'] != widget.uid && !data['isRead']) {
+                    message.reference.update({'isRead': true});
+                    _firestore
+                        .collection('conversations')
+                        .doc(conversationId)
+                        .set({
+                      'unreadMessages': {widget.uid: 0}
+                    }, SetOptions(merge: true));
+                  }
+                }
 
                 return ListView.builder(
                   controller: _scrollController,
@@ -204,63 +216,107 @@ class _ChatScreenState extends State<ChatScreen> {
                     bool isSender = message['senderId'] == widget.uid;
                     bool isEncrypted = message['isEncrypted'];
                     String messageContent = message['message'];
-                    String decryptedMessage = ""; // Initialize here
+                    bool isRead = message['isRead']; // Track read status
+                    String decryptedMessage =
+                        messageContent; // Default to original
 
                     return Padding(
                       padding: const EdgeInsets.all(8.0),
-                      child: StatefulBuilder(// Use StatefulBuilder
-                          builder: (context, setState) {
-                        return GestureDetector(
-                          onLongPress: () async {
-                            if (isEncrypted) {
-                              bool authenticated = await _authenticateUser();
-                              if (authenticated) {
-                                setState(() {
-                                  decryptedMessage =
-                                      decryptMessage(messageContent);
-                                });
-                              } else {
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  const SnackBar(
-                                    content: Text('Authentication failed'),
-                                  ),
-                                );
+                      child: StatefulBuilder(
+                        builder: (context, setState) {
+                          return GestureDetector(
+                            onLongPress: () async {
+                              if (isEncrypted) {
+                                bool authenticated = await _authenticateUser();
+                                if (authenticated) {
+                                  setState(() {
+                                    decryptedMessage =
+                                        decryptMessage(messageContent);
+                                  });
+                                } else {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    const SnackBar(
+                                      content: Text('Authentication failed'),
+                                    ),
+                                  );
+                                }
                               }
-                            }
-                          },
-                          child: Row(
-                            mainAxisAlignment: isSender
-                                ? MainAxisAlignment.end
-                                : MainAxisAlignment.start,
-                            children: [
-                              Container(
-                                padding: const EdgeInsets.all(12.0),
-                                constraints: BoxConstraints(
-                                  maxWidth:
-                                      MediaQuery.of(context).size.width - 60,
-                                ),
-                                decoration: BoxDecoration(
-                                  color: isSender
-                                      ? AppColors.blackIndigoLight
-                                      : Colors.white,
-                                  borderRadius: BorderRadius.circular(12.0),
-                                ),
-                                child: Text(
-                                  decryptedMessage.isNotEmpty
-                                      ? decryptedMessage
-                                      : messageContent,
-                                  overflow: TextOverflow.clip,
-                                  style: TextStyle(
-                                    color:
-                                        isSender ? Colors.white : Colors.black,
-                                    fontSize: 16,
+                            },
+                            child: Row(
+                              mainAxisAlignment: isSender
+                                  ? MainAxisAlignment.end
+                                  : MainAxisAlignment.start,
+                              children: [
+                                Container(
+                                  padding: const EdgeInsets.symmetric(
+                                      vertical: 8.0, horizontal: 12.0),
+                                  constraints: BoxConstraints(
+                                    maxWidth:
+                                        MediaQuery.of(context).size.width *
+                                            0.7, // Max 70% of screen width
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: isSender
+                                        ? AppColors.blackIndigoLight
+                                        : Colors.white,
+                                    borderRadius: BorderRadius.only(
+                                      topLeft: const Radius.circular(12.0),
+                                      topRight: const Radius.circular(12.0),
+                                      bottomLeft: isSender
+                                          ? const Radius.circular(12.0)
+                                          : Radius.zero,
+                                      bottomRight: isSender
+                                          ? Radius.zero
+                                          : const Radius.circular(12.0),
+                                    ),
+                                  ),
+                                  child: IntrinsicWidth(
+                                    // Wrap content width
+                                    child: Column(
+                                      mainAxisSize: MainAxisSize
+                                          .min, // Ensures no extra space
+                                      crossAxisAlignment: isSender
+                                          ? CrossAxisAlignment.end
+                                          : CrossAxisAlignment.start,
+                                      children: [
+                                        Text(
+                                          decryptedMessage,
+                                          textAlign: isSender
+                                              ? TextAlign.end
+                                              : TextAlign.start,
+                                          style: TextStyle(
+                                            color: isSender
+                                                ? Colors.white
+                                                : Colors.black,
+                                            fontSize: 16,
+                                          ),
+                                        ),
+                                        if (isSender)
+                                          Align(
+                                            alignment: Alignment.bottomRight,
+                                            child: Padding(
+                                              padding: const EdgeInsets.only(
+                                                  top: 4.0),
+                                              child: Text(
+                                                isRead ? '✔✔ Read' : '✔ Sent',
+                                                style: TextStyle(
+                                                  fontSize: 12,
+                                                  color: isRead
+                                                      ? Colors.blue
+                                                      : Colors.grey,
+                                                ),
+                                              ),
+                                            ),
+                                          ),
+                                      ],
+                                    ),
                                   ),
                                 ),
-                              ),
-                            ],
-                          ),
-                        );
-                      }),
+                              ],
+                            ),
+                          );
+                        },
+                      ),
                     );
                   },
                 );

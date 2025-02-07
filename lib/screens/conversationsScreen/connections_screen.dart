@@ -62,7 +62,7 @@ class ConnectionsScreen extends StatelessWidget {
 
               return Card(
                 elevation: 4.0,
-                margin: const EdgeInsets.symmetric(vertical: 0, horizontal: 10),
+                margin: const EdgeInsets.symmetric(vertical: 4, horizontal: 10),
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(10.0),
                 ),

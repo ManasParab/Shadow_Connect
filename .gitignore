@@ -1,0 +1,51 @@
+# Flutter/Dart
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+build/
+.pub-cache/
+.pub/
+*.log
+
+# Android specific
+android/app/build/
+android/.gradle/
+android/local.properties
+android/key.properties
+android/captures/
+android/app/debug
+android/app/profile
+android/app/release
+
+# iOS specific
+ios/Pods/
+ios/Runner/GeneratedPluginRegistrant.m
+ios/Runner/GeneratedPluginRegistrant.h
+ios/Flutter/Flutter.podspec
+ios/Flutter/flutter_export_environment.sh
+
+# Firebase
+*.g.dart
+*.freezed.dart
+google-services.json
+GoogleService-Info.plist
+
+# Environment files
+.env
+*.env
+
+# IDE specific
+.idea/
+.vscode/
+*.iml
+*.ipr
+*.iws
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db

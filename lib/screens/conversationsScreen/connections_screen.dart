@@ -4,27 +4,92 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:shadow_connect/constants/colors.dart';
 import 'chat_screen.dart';
 
-class ConnectionsScreen extends StatelessWidget {
-  const ConnectionsScreen({super.key});
+class ConnectionsScreen extends StatefulWidget {
+  final String
+      messageToForward; // Content to forward, defaulting to an empty string if not provided
+  const ConnectionsScreen({super.key, this.messageToForward = ''});
+
+  @override
+  _ConnectionsScreenState createState() => _ConnectionsScreenState();
+}
+
+class _ConnectionsScreenState extends State<ConnectionsScreen> {
+  bool isForwarding = false; // Flag to track if forwarding is in progress
+  Set<String> selectedUserIds = {}; // Store selected user IDs
 
   Future<List<Map<String, dynamic>>> getConnections() async {
-    // Get the current user's UID dynamically
     String currentUserUid = FirebaseAuth.instance.currentUser!.uid;
 
     var snapshot = await FirebaseFirestore.instance
-        .collection('users') // Users collection
-        .doc(currentUserUid) // Current user document
-        .collection('connections') // Connections subcollection
+        .collection('users')
+        .doc(currentUserUid)
+        .collection('connections')
         .get();
 
-    // Map the fetched documents into a list of maps containing usernames and UIDs
     return snapshot.docs
         .map((doc) => {
-              'username':
-                  doc['username'], // Assuming there's a 'username' field
-              'uid': doc['uid'], // Recipient UID
+              'username': doc['username'],
+              'uid': doc['uid'],
             })
         .toList();
+  }
+
+  void _sendForwardedMessages() {
+    if (selectedUserIds.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+            content: Text('Please select at least one user to forward')),
+      );
+      return;
+    }
+
+    // Logic to forward the message to selected users
+    selectedUserIds.forEach((recipientUid) async {
+      // Generate a unique conversation ID using the sender and recipient UIDs
+      String senderUid = FirebaseAuth.instance.currentUser!.uid;
+      String conversationId = senderUid.compareTo(recipientUid) < 0
+          ? '$senderUid' '_' '$recipientUid'
+          : '$recipientUid' '_' '$senderUid';
+
+      // Reference to the conversation and messages sub-collection
+      DocumentReference conversationRef = FirebaseFirestore.instance
+          .collection('conversations')
+          .doc(conversationId);
+      CollectionReference messagesRef = conversationRef.collection('messages');
+
+      // Create the message data
+
+      Map<String, dynamic> messageData = {
+        'message': widget.messageToForward,
+        'senderId': senderUid,
+        'recipientId': recipientUid,
+        'time': DateTime.now().millisecondsSinceEpoch,
+        'isEncrypted': false,
+        'isDeleted': false,
+        'isRead': false,
+        'isForwarded': true, // Mark the message as forwarded
+      };
+
+      // Add the message to the messages sub-collection
+      await messagesRef.add(messageData);
+
+      // Update the conversation with the last message details
+      await conversationRef.set({
+        'participants': [senderUid, recipientUid],
+        'lastMessage': widget.messageToForward,
+        'lastMessageTimestamp': DateTime.now().millisecondsSinceEpoch,
+        'unreadMessages': {
+          recipientUid: FieldValue.increment(1),
+          senderUid: 0,
+        },
+        'totalMessages': FieldValue.increment(1), // Increment totalMessages
+      }, SetOptions(merge: true));
+    });
+
+    ScaffoldMessenger.of(context)
+        .showSnackBar(const SnackBar(content: Text('Messages forwarded!')));
+
+    Navigator.pop(context);
   }
 
   @override
@@ -37,6 +102,14 @@ class ConnectionsScreen extends StatelessWidget {
           style: TextStyle(color: Colors.white),
         ),
         backgroundColor: AppColors.blackIndigoDark,
+        actions: [
+          if (widget.messageToForward
+              .isNotEmpty) // Show the send button only when forwarding
+            IconButton(
+              icon: const Icon(Icons.send),
+              onPressed: _sendForwardedMessages,
+            ),
+        ],
       ),
       body: FutureBuilder<List<Map<String, dynamic>>>(
         future: getConnections(),
@@ -84,25 +157,40 @@ class ConnectionsScreen extends StatelessWidget {
                       fontSize: 14.0,
                     ),
                   ),
-                  trailing: const Icon(
-                    Icons.chat_bubble_outline,
-                    color: Colors.white,
-                  ),
-                  onTap: () {
-                    String currentUserUid =
-                        FirebaseAuth.instance.currentUser!.uid;
-
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (context) => ChatScreen(
-                          uid: currentUserUid, // Pass current user's UID
-                          recipientUid: connection['uid'], // Pass recipient UID
-                          recipientUsername:
-                              connection['username'], // Pass recipient username
+                  trailing: widget.messageToForward.isNotEmpty
+                      ? Checkbox(
+                          value: selectedUserIds.contains(connection['uid']),
+                          onChanged: (bool? value) {
+                            setState(() {
+                              if (value == true) {
+                                if (selectedUserIds.length < 15) {
+                                  selectedUserIds.add(connection['uid']);
+                                }
+                              } else {
+                                selectedUserIds.remove(connection['uid']);
+                              }
+                            });
+                          },
+                        )
+                      : const Icon(
+                          Icons.chat_bubble_outline,
+                          color: Colors.white,
                         ),
-                      ),
-                    );
+                  onTap: () {
+                    if (widget.messageToForward.isEmpty) {
+                      String currentUserUid =
+                          FirebaseAuth.instance.currentUser!.uid;
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (context) => ChatScreen(
+                            uid: currentUserUid,
+                            recipientUid: connection['uid'],
+                            recipientUsername: connection['username'],
+                          ),
+                        ),
+                      );
+                    }
                   },
                 ),
               );

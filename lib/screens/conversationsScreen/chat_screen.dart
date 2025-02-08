@@ -6,8 +6,7 @@ import 'package:encrypt/encrypt.dart' as encrypt;
 import 'package:local_auth/local_auth.dart';
 import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
-import 'package:http/http.dart' as http;
-import 'package:firebase_messaging/firebase_messaging.dart';
+import 'connections_screen.dart';
 
 class ChatScreen extends StatefulWidget {
   final String uid;
@@ -26,23 +25,24 @@ class ChatScreen extends StatefulWidget {
 }
 
 class _ChatScreenState extends State<ChatScreen> {
+  final TextEditingController _controller = TextEditingController();
+  final ScrollController _scrollController = ScrollController();
+  final FirebaseFirestore _firestore = FirebaseFirestore.instance;
+  final LocalAuthentication _localAuthentication = LocalAuthentication();
+  bool _isSendingEncrypted = false;
+  bool _isBulkActionMode = false; // Check if bulk action mode is enabled
+  final _key = encrypt.Key.fromUtf8('32charlengthfor256bitkey12345678');
+  final _iv = encrypt.IV.fromLength(16);
+
+  Set<String> _selectedMessages = {}; // Keep track of selected messages
+
   @override
   void initState() {
     super.initState();
   }
 
-  final TextEditingController _controller = TextEditingController();
-  final ScrollController _scrollController = ScrollController();
-  final FirebaseFirestore _firestore = FirebaseFirestore.instance;
-  final LocalAuthentication _localAuthentication = LocalAuthentication();
-
-  bool _isSendingEncrypted = false;
-
-  final _key = encrypt.Key.fromUtf8('32charlengthfor256bitkey12345678');
-  final _iv = encrypt.IV.fromLength(16);
-
   String get conversationId {
-    List<String> ids = [widget.uid, widget.recipientUid];
+    List ids = [widget.uid, widget.recipientUid];
     ids.sort();
     return ids.join("_");
   }
@@ -53,56 +53,51 @@ class _ChatScreenState extends State<ChatScreen> {
     return '$date $time';
   }
 
-  Future<void> sendMessage({bool isEncrypted = true}) async {
+  Future sendMessage({bool isEncrypted = true}) async {
     if (_controller.text.isNotEmpty) {
       String message = _controller.text.trim();
       if (message.isNotEmpty) {
         message = message[0].toUpperCase() + message.substring(1);
       }
-
       _controller.clear();
-
-      await _sendMessage(
-          message, isEncrypted); // Send message with encryption flag
-
-      _isSendingEncrypted = false; // Reset the encryption flag after sending
+      await _sendMessage(message, isEncrypted);
+      _isSendingEncrypted = false;
     }
   }
 
-  Future<void> _sendMessage(String message, bool isEncrypted) async {
+  Future _sendMessage(String message, bool isEncrypted) async {
     final timestamp = DateTime.now().millisecondsSinceEpoch;
     String messageToSend = message;
-
     if (isEncrypted) {
       messageToSend = encryptMessage(message);
     }
 
     DocumentReference conversationRef =
         _firestore.collection('conversations').doc(conversationId);
-
     CollectionReference messagesRef = conversationRef.collection('messages');
 
     Map<String, dynamic> messageData = {
-      'messageId': timestamp.toString(),
       'message': messageToSend,
       'senderId': widget.uid,
+      'recipientId': widget.recipientUid,
       'time': timestamp,
       'isEncrypted': isEncrypted,
       'isDeleted': false,
       'isRead': false,
+      'isForwarded': false,
     };
 
     await messagesRef.add(messageData);
 
-    // Update conversation document with last message and unread count
     await conversationRef.set({
       'participants': [widget.uid, widget.recipientUid],
       'lastMessage': messageToSend,
       'lastMessageTimestamp': timestamp,
       'unreadMessages': {
-        widget.recipientUid: FieldValue.increment(1), // Increment for recipient
-        widget.uid: 0, // Sender's unread count is always 0 for the new message
-      }
+        widget.recipientUid: FieldValue.increment(1),
+        widget.uid: 0,
+      },
+      'totalMessages': FieldValue.increment(1), // Increment totalMessages
     }, SetOptions(merge: true));
 
     Future.delayed(const Duration(milliseconds: 300), () {
@@ -110,25 +105,18 @@ class _ChatScreenState extends State<ChatScreen> {
     });
   }
 
-  // Encryption function
   String encryptMessage(String message) {
     final key = encrypt.Key.fromUtf8('32charlengthfor256bitkey12345678');
-    final iv = encrypt.IV.fromLength(16); // Generate a random IV
+    final iv = encrypt.IV.fromLength(16);
     final encrypter =
         encrypt.Encrypter(encrypt.AES(key, mode: encrypt.AESMode.cbc));
-
     final encrypted = encrypter.encrypt(message, iv: iv);
-
-    // Store IV along with the encrypted message (Base64 encoding both)
     final encodedIV = base64.encode(iv.bytes);
     final encodedMessage = encrypted.base64;
-
     return '$encodedIV:$encodedMessage';
   }
 
-  Future<void> _markMessageAsRead(String messageId) async {
-    print("Message ID : $messageId");
-
+  Future _markMessageAsRead(String messageId) async {
     await _firestore
         .collection('conversations')
         .doc(conversationId)
@@ -136,14 +124,12 @@ class _ChatScreenState extends State<ChatScreen> {
         .doc(messageId)
         .update({'isRead': true});
 
-    // Decrement unread message count in conversation document
     await _firestore.collection('conversations').doc(conversationId).update({
-      'unreadMessages.${widget.uid}':
-          FieldValue.increment(-1), // Decrement for the user marking as read
+      'unreadMessages.${widget.uid}': FieldValue.increment(-1),
     });
   }
 
-  Future<bool> _authenticateUser() async {
+  Future _authenticateUser() async {
     try {
       final bool canAuthenticate =
           await _localAuthentication.canCheckBiometrics ||
@@ -170,18 +156,13 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
-// Decryption function
   String decryptMessage(String encryptedMessage) {
     try {
       final key = encrypt.Key.fromUtf8('32charlengthfor256bitkey12345678');
-
-      // Extract IV and the encrypted message
       final parts = encryptedMessage.split(':');
       if (parts.length != 2) return '';
-
       final iv = encrypt.IV.fromBase64(parts[0]);
       final encryptedText = parts[1];
-
       final encrypter =
           encrypt.Encrypter(encrypt.AES(key, mode: encrypt.AESMode.cbc));
       return encrypter.decrypt64(encryptedText, iv: iv);
@@ -189,6 +170,58 @@ class _ChatScreenState extends State<ChatScreen> {
       print('Decryption failed: $e');
       return '';
     }
+  }
+
+  // Delete selected messages
+  Future<void> _deleteMessages() async {
+    for (var messageId in _selectedMessages) {
+      await _firestore
+          .collection('conversations')
+          .doc(conversationId)
+          .collection('messages')
+          .doc(messageId)
+          .delete();
+
+      // Decrement the totalMessages field
+      await _firestore.collection('conversations').doc(conversationId).update({
+        'totalMessages': FieldValue.increment(-1),
+      });
+
+      // Check if totalMessages is 0, then delete the conversation document
+      DocumentSnapshot conversationSnapshot = await _firestore
+          .collection('conversations')
+          .doc(conversationId)
+          .get();
+
+      // Cast data as Map<String, dynamic> before accessing the 'totalMessages' field
+      Map<String, dynamic> data =
+          conversationSnapshot.data() as Map<String, dynamic>;
+      int totalMessages = data['totalMessages'] ?? 0;
+
+      if (totalMessages == 0) {
+        await _firestore
+            .collection('conversations')
+            .doc(conversationId)
+            .delete();
+      }
+    }
+
+    setState(() {
+      _selectedMessages.clear();
+      _isBulkActionMode = false; // Exit bulk mode
+    });
+  }
+
+  // Toggle message selection
+  void _toggleMessageSelection(String messageId) {
+    setState(() {
+      if (_selectedMessages.contains(messageId)) {
+        _selectedMessages.remove(messageId);
+      } else {
+        _selectedMessages.add(messageId);
+      }
+      _isBulkActionMode = _selectedMessages.isNotEmpty;
+    });
   }
 
   void _scrollToBottom() {
@@ -201,6 +234,82 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
+  // Handle menu item selections
+  // Handle menu item selections (for bulk actions)
+  void _handleMenuSelection(String value) {
+    switch (value) {
+      case 'clear':
+        _clearChat();
+        break;
+      case 'mute':
+        _muteNotifications();
+        break;
+      case 'delete':
+        _deleteMessages();
+        break;
+      case 'forward':
+        _forwardMessages();
+        break;
+      case 'block':
+        _blockUser();
+        break;
+    }
+  }
+
+  void _clearChat() {
+    // Add your logic to clear chat messages
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Chat cleared!')),
+    );
+  }
+
+  void _muteNotifications() {
+    // Add your logic to mute notifications
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Notifications muted!')),
+    );
+  }
+
+  void _blockUser() {
+    _firestore.collection('users').doc(widget.uid).update({
+      'blockedUsers': FieldValue.arrayUnion([widget.recipientUid]),
+    });
+    ScaffoldMessenger.of(context)
+        .showSnackBar(const SnackBar(content: Text('User blocked')));
+  }
+
+  void _forwardMessages() {
+    // Get the content of the selected message. Here, assuming the selected message
+    // is the one that has been long-pressed or toggled.
+    String messageToForward = '';
+
+    // Loop through selected messages to get their content
+    for (var messageId in _selectedMessages) {
+      var messageDoc = _firestore
+          .collection('conversations')
+          .doc(conversationId)
+          .collection('messages')
+          .doc(messageId);
+
+      messageDoc.get().then((docSnapshot) {
+        if (docSnapshot.exists) {
+          var message = docSnapshot.data() as Map<String, dynamic>;
+          messageToForward = message['message'] ?? '';
+
+          if (messageToForward.isNotEmpty) {
+            Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (context) =>
+                    ConnectionsScreen(messageToForward: messageToForward),
+              ),
+            );
+          }
+        }
+      });
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -209,12 +318,38 @@ class _ChatScreenState extends State<ChatScreen> {
         title: Text(widget.recipientUsername,
             style: const TextStyle(color: Colors.white)),
         backgroundColor: AppColors.blackIndigoLight,
+        actions: [
+          if (_isBulkActionMode) ...[
+            IconButton(
+              icon: const Icon(Icons.delete),
+              onPressed: _deleteMessages,
+            ),
+            IconButton(
+              icon: const Icon(Icons.forward),
+              onPressed: _forwardMessages,
+            ),
+          ],
+          PopupMenuButton<String>(
+            onSelected: _handleMenuSelection,
+            itemBuilder: (BuildContext context) => [
+              const PopupMenuItem<String>(
+                  value: 'clear', child: Text('Clear Chat')),
+              const PopupMenuItem<String>(
+                  value: 'mute', child: Text('Mute Notifications')),
+              const PopupMenuItem<String>(
+                  value: 'delete', child: Text('Delete')),
+              const PopupMenuItem<String>(
+                  value: 'forward', child: Text('Forward')),
+              const PopupMenuItem<String>(
+                  value: 'block', child: Text('Block User')),
+            ],
+          ),
+        ],
       ),
       body: Column(
         children: [
           Expanded(
-            child: // Inside the StreamBuilder widget
-                StreamBuilder<QuerySnapshot>(
+            child: StreamBuilder(
               stream: _firestore
                   .collection('conversations')
                   .doc(conversationId)
@@ -227,11 +362,9 @@ class _ChatScreenState extends State<ChatScreen> {
                 }
 
                 var messages = snapshot.data!.docs;
-
-                // Call _scrollToBottom whenever the new messages are loaded
                 if (messages.isNotEmpty) {
                   Future.delayed(const Duration(milliseconds: 100), () {
-                    _scrollToBottom(); // Ensure the scroll happens after the UI update
+                    _scrollToBottom();
                   });
                 }
 
@@ -240,18 +373,19 @@ class _ChatScreenState extends State<ChatScreen> {
                   itemCount: messages.length,
                   itemBuilder: (context, index) {
                     var messageDoc = snapshot.data!.docs[index];
-                    var message = messageDoc.data() as Map<String, dynamic>;
+                    var message = messageDoc.data() as Map;
                     String messageId = messageDoc.id;
                     bool isSender = message['senderId'] == widget.uid;
                     bool isEncrypted = message['isEncrypted'];
                     String messageContent = message['message'];
-                    bool isRead =
-                        message['isRead'] ?? false; // Track read status
-                    String decryptedMessage =
-                        messageContent; // Default to original
+                    bool isRead = message['isRead'] ?? false;
+                    bool isDeleted = message['isDeleted'] ?? false;
+                    String displayMessage =
+                        isDeleted ? 'Message Deleted' : messageContent;
+                    String decryptedMessage = displayMessage;
 
                     if (!isSender && !isRead) {
-                      _markMessageAsRead(messageId); // Mark as read NOW
+                      _markMessageAsRead(messageId);
                     }
 
                     return Padding(
@@ -260,7 +394,7 @@ class _ChatScreenState extends State<ChatScreen> {
                         builder: (context, setState) {
                           return GestureDetector(
                             onLongPress: () async {
-                              if (isEncrypted) {
+                              if (isEncrypted && !isDeleted) {
                                 bool authenticated = await _authenticateUser();
                                 if (authenticated) {
                                   setState(() {
@@ -270,101 +404,128 @@ class _ChatScreenState extends State<ChatScreen> {
                                 } else {
                                   ScaffoldMessenger.of(context).showSnackBar(
                                     const SnackBar(
-                                      content: Text('Authentication failed'),
-                                    ),
+                                        content: Text('Authentication failed')),
                                   );
                                 }
                               }
                             },
-                            child: Row(
-                              mainAxisAlignment: isSender
-                                  ? MainAxisAlignment.end
-                                  : MainAxisAlignment.start,
-                              children: [
-                                Container(
-                                  padding: const EdgeInsets.symmetric(
-                                      vertical: 8.0, horizontal: 12.0),
-                                  constraints: BoxConstraints(
-                                    maxWidth:
-                                        MediaQuery.of(context).size.width *
-                                            0.7, // Max 70% of screen width
-                                  ),
-                                  decoration: BoxDecoration(
-                                    color: isSender
-                                        ? AppColors.blackIndigoLight
-                                        : Colors.white,
-                                    borderRadius: BorderRadius.only(
-                                      topLeft: const Radius.circular(12.0),
-                                      topRight: const Radius.circular(12.0),
-                                      bottomLeft: isSender
-                                          ? const Radius.circular(12.0)
-                                          : Radius.zero,
-                                      bottomRight: isSender
-                                          ? Radius.zero
-                                          : const Radius.circular(12.0),
+                            onDoubleTap: () =>
+                                _toggleMessageSelection(messageId),
+                            onTap: () {
+                              if (_selectedMessages.isEmpty) {
+                              } else {
+                                _toggleMessageSelection(messageId);
+                              }
+                            },
+                            child: ListTile(
+                              contentPadding:
+                                  EdgeInsets.zero, // To avoid extra padding
+                              title: Row(
+                                mainAxisAlignment: isSender
+                                    ? MainAxisAlignment.end
+                                    : MainAxisAlignment.start,
+                                children: [
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(
+                                        vertical: 8.0, horizontal: 12.0),
+                                    constraints: BoxConstraints(
+                                      maxWidth:
+                                          MediaQuery.of(context).size.width *
+                                              0.7,
                                     ),
-                                  ),
-                                  child: IntrinsicWidth(
-                                    // Wrap content width
-                                    child: Column(
-                                      mainAxisSize: MainAxisSize
-                                          .min, // Ensures no extra space
-                                      crossAxisAlignment: isSender
-                                          ? CrossAxisAlignment.end
-                                          : CrossAxisAlignment.start,
-                                      children: [
-                                        Text(
-                                          decryptedMessage,
-                                          textAlign: isSender
-                                              ? TextAlign.end
-                                              : TextAlign.start,
-                                          style: TextStyle(
-                                            color: isSender
-                                                ? Colors.white
-                                                : Colors.black,
-                                            fontSize: 16,
+                                    decoration: BoxDecoration(
+                                      color: isSender
+                                          ? AppColors.blackIndigoLight
+                                          : Colors.white,
+                                      borderRadius: BorderRadius.only(
+                                        topLeft: const Radius.circular(12.0),
+                                        topRight: const Radius.circular(12.0),
+                                        bottomLeft: isSender
+                                            ? const Radius.circular(12.0)
+                                            : Radius.zero,
+                                        bottomRight: isSender
+                                            ? Radius.zero
+                                            : const Radius.circular(12.0),
+                                      ),
+                                    ),
+                                    child: IntrinsicWidth(
+                                      child: Column(
+                                        mainAxisSize: MainAxisSize.min,
+                                        crossAxisAlignment: isSender
+                                            ? CrossAxisAlignment.end
+                                            : CrossAxisAlignment.start,
+                                        children: [
+                                          Row(
+                                            mainAxisSize: MainAxisSize.min,
+                                            children: [
+                                              if (isDeleted) ...[
+                                                const Icon(Icons.delete,
+                                                    color: Colors.grey,
+                                                    size: 16),
+                                                const SizedBox(width: 4),
+                                              ],
+                                              Flexible(
+                                                child: Text(
+                                                  decryptedMessage,
+                                                  textAlign: isSender
+                                                      ? TextAlign.end
+                                                      : TextAlign.start,
+                                                  style: TextStyle(
+                                                    color: isDeleted
+                                                        ? Colors.grey
+                                                        : (isSender
+                                                            ? Colors.white
+                                                            : Colors.black),
+                                                    fontSize: 16,
+                                                    fontStyle: isDeleted
+                                                        ? FontStyle.italic
+                                                        : FontStyle.normal,
+                                                  ),
+                                                ),
+                                              ),
+                                            ],
                                           ),
-                                        ),
-                                        if (isSender)
+                                          if (isSender)
+                                            Align(
+                                              alignment: Alignment.bottomRight,
+                                              child: Padding(
+                                                padding: const EdgeInsets.only(
+                                                    top: 4.0),
+                                                child: Text(
+                                                  isRead ? '✔✔ Read' : '✔ Sent',
+                                                  style: TextStyle(
+                                                    fontSize: 12,
+                                                    color: isRead
+                                                        ? Colors.blue
+                                                        : Colors.grey,
+                                                  ),
+                                                ),
+                                              ),
+                                            ),
                                           Align(
-                                            alignment: Alignment.bottomRight,
+                                            alignment: isSender
+                                                ? Alignment.bottomRight
+                                                : Alignment.bottomLeft,
                                             child: Padding(
                                               padding: const EdgeInsets.only(
                                                   top: 4.0),
                                               child: Text(
-                                                isRead ? '✔✔ Read' : '✔ Sent',
-                                                style: TextStyle(
+                                                formatTimestamp(DateTime
+                                                    .fromMillisecondsSinceEpoch(
+                                                        message['time'])),
+                                                style: const TextStyle(
                                                   fontSize: 12,
-                                                  color: isRead
-                                                      ? Colors.blue
-                                                      : Colors.grey,
+                                                  color: Colors.grey,
                                                 ),
                                               ),
                                             ),
                                           ),
-                                        Align(
-                                          alignment: isSender
-                                              ? Alignment.bottomRight
-                                              : Alignment.bottomLeft,
-                                          child: Padding(
-                                            padding:
-                                                const EdgeInsets.only(top: 4.0),
-                                            child: Text(
-                                              formatTimestamp(DateTime
-                                                  .fromMillisecondsSinceEpoch(
-                                                      message['time'])),
-                                              style: const TextStyle(
-                                                fontSize: 12,
-                                                color: Colors.grey,
-                                              ),
-                                            ),
-                                          ),
-                                        ),
-                                      ],
+                                        ],
+                                      ),
                                     ),
                                   ),
-                                ),
-                              ],
+                                ],
+                              ),
                             ),
                           );
                         },

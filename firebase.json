@@ -1,1 +1,38 @@
-{"flutter":{"platforms":{"android":{"default":{"projectId":"shadow-connect-fce91","appId":"1:977343267818:android:df5084f88db13865e3a893","fileOutput":"android/app/google-services.json"}},"dart":{"lib/firebase_options.dart":{"projectId":"shadow-connect-fce91","configurations":{"android":"1:977343267818:android:df5084f88db13865e3a893","windows":"1:977343267818:web:d86fd04f41412e4ae3a893"}}}}}}
+{
+  "flutter": {
+    "platforms": {
+      "android": {
+        "default": {
+          "projectId": "shadow-connect-fce91",
+          "appId": "1:977343267818:android:df5084f88db13865e3a893",
+          "fileOutput": "android/app/google-services.json"
+        }
+      },
+      "dart": {
+        "lib/firebase_options.dart": {
+          "projectId": "shadow-connect-fce91",
+          "configurations": {
+            "android": "1:977343267818:android:df5084f88db13865e3a893",
+            "windows": "1:977343267818:web:d86fd04f41412e4ae3a893"
+          }
+        }
+      }
+    }
+  },
+  "functions": [
+    {
+      "source": "functions",
+      "codebase": "default",
+      "ignore": [
+        "node_modules",
+        ".git",
+        "firebase-debug.log",
+        "firebase-debug.*.log",
+        "*.local"
+      ],
+      "predeploy": [
+        "npm --prefix \"$RESOURCE_DIR\" run lint"
+      ]
+    }
+  ]
+}

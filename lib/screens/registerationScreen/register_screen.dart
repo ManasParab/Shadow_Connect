@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:shadow_connect/constants/colors.dart';
 import 'package:shadow_connect/main.dart';
 import 'package:shadow_connect/screens/loginScreen/login_screen.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
 
 class RegisterScreen extends StatefulWidget {
   const RegisterScreen({super.key});

@@ -6,6 +6,8 @@ import 'package:encrypt/encrypt.dart' as encrypt;
 import 'package:local_auth/local_auth.dart';
 import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
+import 'package:http/http.dart' as http;
+import 'package:firebase_messaging/firebase_messaging.dart';
 
 class ChatScreen extends StatefulWidget {
   final String uid;
@@ -24,6 +26,11 @@ class ChatScreen extends StatefulWidget {
 }
 
 class _ChatScreenState extends State<ChatScreen> {
+  @override
+  void initState() {
+    super.initState();
+  }
+
   final TextEditingController _controller = TextEditingController();
   final ScrollController _scrollController = ScrollController();
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
@@ -46,7 +53,7 @@ class _ChatScreenState extends State<ChatScreen> {
     return '$date $time';
   }
 
-  Future<void> sendMessage({bool isEncrypted = false}) async {
+  Future<void> sendMessage({bool isEncrypted = true}) async {
     if (_controller.text.isNotEmpty) {
       String message = _controller.text.trim();
       if (message.isNotEmpty) {
@@ -64,12 +71,10 @@ class _ChatScreenState extends State<ChatScreen> {
 
   Future<void> _sendMessage(String message, bool isEncrypted) async {
     final timestamp = DateTime.now().millisecondsSinceEpoch;
-
     String messageToSend = message;
 
     if (isEncrypted) {
-      messageToSend =
-          encryptMessage(message); // Encrypt the message if required
+      messageToSend = encryptMessage(message);
     }
 
     DocumentReference conversationRef =
@@ -87,18 +92,21 @@ class _ChatScreenState extends State<ChatScreen> {
       'isRead': false,
     };
 
-    await messagesRef.add(messageData); // Add message to Firestore
+    await messagesRef.add(messageData);
 
-    // Update conversation document with the last message and unread count
+    // Update conversation document with last message and unread count
     await conversationRef.set({
       'participants': [widget.uid, widget.recipientUid],
       'lastMessage': messageToSend,
       'lastMessageTimestamp': timestamp,
-      'unreadMessages': {widget.recipientUid: FieldValue.increment(1)}
+      'unreadMessages': {
+        widget.recipientUid: FieldValue.increment(1), // Increment for recipient
+        widget.uid: 0, // Sender's unread count is always 0 for the new message
+      }
     }, SetOptions(merge: true));
 
     Future.delayed(const Duration(milliseconds: 300), () {
-      _scrollToBottom(); // Scroll to the latest message
+      _scrollToBottom();
     });
   }
 
@@ -116,6 +124,23 @@ class _ChatScreenState extends State<ChatScreen> {
     final encodedMessage = encrypted.base64;
 
     return '$encodedIV:$encodedMessage';
+  }
+
+  Future<void> _markMessageAsRead(String messageId) async {
+    print("Message ID : $messageId");
+
+    await _firestore
+        .collection('conversations')
+        .doc(conversationId)
+        .collection('messages')
+        .doc(messageId)
+        .update({'isRead': true});
+
+    // Decrement unread message count in conversation document
+    await _firestore.collection('conversations').doc(conversationId).update({
+      'unreadMessages.${widget.uid}':
+          FieldValue.increment(-1), // Decrement for the user marking as read
+    });
   }
 
   Future<bool> _authenticateUser() async {
@@ -214,14 +239,20 @@ class _ChatScreenState extends State<ChatScreen> {
                   controller: _scrollController,
                   itemCount: messages.length,
                   itemBuilder: (context, index) {
-                    var message =
-                        messages[index].data() as Map<String, dynamic>;
+                    var messageDoc = snapshot.data!.docs[index];
+                    var message = messageDoc.data() as Map<String, dynamic>;
+                    String messageId = messageDoc.id;
                     bool isSender = message['senderId'] == widget.uid;
                     bool isEncrypted = message['isEncrypted'];
                     String messageContent = message['message'];
-                    bool isRead = message['isRead']; // Track read status
+                    bool isRead =
+                        message['isRead'] ?? false; // Track read status
                     String decryptedMessage =
                         messageContent; // Default to original
+
+                    if (!isSender && !isRead) {
+                      _markMessageAsRead(messageId); // Mark as read NOW
+                    }
 
                     return Padding(
                       padding: const EdgeInsets.all(8.0),

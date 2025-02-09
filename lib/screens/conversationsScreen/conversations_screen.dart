@@ -24,7 +24,12 @@ class ConversationsScreen extends StatelessWidget {
         return {
           'conversationId': doc.id,
           'groupName': data.containsKey('groupName') ? data['groupName'] : null,
-          'participants': List<String>.from(data['participants']),
+          'participants': data.containsKey('participants')
+              ? List<String>.from(data['participants'] ?? [])
+              : [],
+          'admins': data.containsKey('admins')
+              ? List<String>.from(data['admins'] ?? [])
+              : [],
           'latestMessage': data['lastMessage'] ?? 'No messages yet',
           'timestamp': data['lastMessageTimestamp'] ?? 0,
           'unreadCount': data['unreadMessages']?[currentUserUid] ?? 0,
@@ -64,7 +69,8 @@ class ConversationsScreen extends StatelessWidget {
           }
 
           var conversations = snapshot.data!;
-          conversations.sort((a, b) => b['timestamp'].compareTo(a['timestamp']));
+          conversations
+              .sort((a, b) => b['timestamp'].compareTo(a['timestamp']));
 
           return ListView.builder(
             itemCount: conversations.length,
@@ -75,7 +81,8 @@ class ConversationsScreen extends StatelessWidget {
                 // Group Chat Item
                 return Card(
                   elevation: 4.0,
-                  margin: const EdgeInsets.symmetric(vertical: 4, horizontal: 10),
+                  margin:
+                      const EdgeInsets.symmetric(vertical: 4, horizontal: 10),
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(10.0),
                   ),
@@ -116,7 +123,8 @@ class ConversationsScreen extends StatelessWidget {
                           )
                         : const SizedBox(), // If no unread messages, show nothing
                     onTap: () {
-                      String currentUserUid = FirebaseAuth.instance.currentUser!.uid;
+                      String currentUserUid =
+                          FirebaseAuth.instance.currentUser!.uid;
 
                       // Reset unread count for the group chat
                       FirebaseFirestore.instance
@@ -130,6 +138,7 @@ class ConversationsScreen extends StatelessWidget {
                           builder: (context) => GroupChatScreen(
                             groupId: conversation['conversationId'],
                             participantIds: conversation['participants'],
+                            adminIds: conversation['admins'],
                             groupName: conversation['groupName'],
                             currentUserUid: currentUserUid,
                           ),
@@ -143,8 +152,8 @@ class ConversationsScreen extends StatelessWidget {
                 return FutureBuilder<DocumentSnapshot>(
                   future: FirebaseFirestore.instance
                       .collection('users')
-                      .doc(conversation['participants']
-                          .firstWhere((uid) => uid != FirebaseAuth.instance.currentUser!.uid))
+                      .doc(conversation['participants'].firstWhere((uid) =>
+                          uid != FirebaseAuth.instance.currentUser!.uid))
                       .get(),
                   builder: (context, userSnapshot) {
                     if (!userSnapshot.hasData || !userSnapshot.data!.exists) {
@@ -157,7 +166,8 @@ class ConversationsScreen extends StatelessWidget {
 
                     return Card(
                       elevation: 4.0,
-                      margin: const EdgeInsets.symmetric(vertical: 4, horizontal: 10),
+                      margin: const EdgeInsets.symmetric(
+                          vertical: 4, horizontal: 10),
                       shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(10.0),
                       ),
@@ -198,7 +208,8 @@ class ConversationsScreen extends StatelessWidget {
                               )
                             : const SizedBox(), // If no unread messages, show nothing
                         onTap: () {
-                          String currentUserUid = FirebaseAuth.instance.currentUser!.uid;
+                          String currentUserUid =
+                              FirebaseAuth.instance.currentUser!.uid;
 
                           // Reset unread count for private chat
                           FirebaseFirestore.instance
@@ -211,8 +222,11 @@ class ConversationsScreen extends StatelessWidget {
                             MaterialPageRoute(
                               builder: (context) => ChatScreen(
                                 uid: currentUserUid, // Pass current user's UID
-                                recipientUid: recipientUid, // Pass recipient UID
-                                recipientUsername: recipientUsername, // Pass recipient username
+                                recipientUid:
+                                    recipientUid, // Pass recipient UID
+                                recipientUsername:
+                                    recipientUsername, // Pass recipient username
+                                    
                               ),
                             ),
                           );

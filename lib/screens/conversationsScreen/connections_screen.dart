@@ -7,7 +7,15 @@ import 'chat_screen.dart';
 
 class ConnectionsScreen extends StatefulWidget {
   final String messageToForward;
-  const ConnectionsScreen({super.key, this.messageToForward = ''});
+  final bool isAddingParticipants;
+  final String? conversationId; // Add conversationId as a parameter
+
+  const ConnectionsScreen({
+    super.key,
+    this.messageToForward = '',
+    this.isAddingParticipants = false,
+    this.conversationId, // Optional parameter
+  });
 
   @override
   _ConnectionsScreenState createState() => _ConnectionsScreenState();
@@ -15,10 +23,12 @@ class ConnectionsScreen extends StatefulWidget {
 
 class _ConnectionsScreenState extends State<ConnectionsScreen> {
   Set<String> selectedUserIds = {};
+  Set<String> adminUserIds = {};
 
   // Optimized method to fetch connections
   Future<List<Map<String, dynamic>>> getConnections() async {
     String currentUserUid = FirebaseAuth.instance.currentUser!.uid;
+
     var snapshot = await FirebaseFirestore.instance
         .collection('users')
         .doc(currentUserUid)
@@ -33,47 +43,39 @@ class _ConnectionsScreenState extends State<ConnectionsScreen> {
     }).toList();
   }
 
+  final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   // Method to create the group chat
   void _createGroupChat() async {
     if (selectedUserIds.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please select at least one user to create a group')),
+        const SnackBar(
+            content: Text('Please select at least one user to create a group')),
       );
       return;
     }
 
     String currentUserUid = FirebaseAuth.instance.currentUser!.uid;
     selectedUserIds.add(currentUserUid);
+    adminUserIds.add(currentUserUid);
 
-    String groupId = selectedUserIds.toList().join('_'); // Combine selected UIDs to form a unique group ID
+    String groupId = selectedUserIds
+        .toList()
+        .join('_'); // Combine selected UIDs to form a unique group ID
 
     // Create group chat data
-    DocumentReference groupChatRef = FirebaseFirestore.instance.collection('conversations').doc(groupId);
+    DocumentReference groupChatRef =
+        FirebaseFirestore.instance.collection('conversations').doc(groupId);
 
     // Create group chat if it doesn't exist
     await groupChatRef.set({
       'participants': List<String>.from(selectedUserIds),
+      'admins': List<String>.from(adminUserIds),
       'groupName': 'Group Chat', // Customize if needed
       'lastMessage': widget.messageToForward,
       'lastMessageTimestamp': DateTime.now().millisecondsSinceEpoch,
       'unreadMessages': {currentUserUid: 0},
       'totalMessages': 0,
     });
-
-    // Add the forwarded message (if any)
-    if (widget.messageToForward.isNotEmpty) {
-      await groupChatRef.collection('messages').add({
-        'message': widget.messageToForward,
-        'senderId': currentUserUid,
-        'time': DateTime.now().millisecondsSinceEpoch,
-        'isEncrypted': false,
-        'isDeleted': false,
-        'isRead': false,
-        'isForwarded': true,
-      });
-    }
-
-    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Group chat created!')));
 
     // Navigate to the group chat screen with updated parameters
     Navigator.push(
@@ -82,11 +84,122 @@ class _ConnectionsScreenState extends State<ConnectionsScreen> {
         builder: (context) => GroupChatScreen(
           groupId: groupId,
           participantIds: List<String>.from(selectedUserIds),
+          adminIds: List<String>.from(adminUserIds),
           groupName: 'Group Chat', // Customize if needed
           currentUserUid: currentUserUid,
         ),
       ),
     );
+  }
+
+  Future _forwardMessageToUsers(
+      List<String> selectedUserIds, String messageToForward) async {
+    if (messageToForward.isNotEmpty && selectedUserIds.isNotEmpty) {
+      String currentUserUid = FirebaseAuth.instance.currentUser!.uid;
+      final timestamp = DateTime.now().millisecondsSinceEpoch;
+
+      for (String userId in selectedUserIds) {
+        // Generate or fetch the conversation ID between the current user and recipient
+        String conversationId =
+            await _getExistingConversationId(currentUserUid, userId);
+
+        // Reference to the conversation document
+        DocumentReference conversationRef =
+            _firestore.collection('conversations').doc(conversationId);
+        CollectionReference messagesRef =
+            conversationRef.collection('messages');
+
+        // Prepare the message data
+        Map<String, dynamic> forwardedMessageData = {
+          'message': messageToForward,
+          'senderId': currentUserUid,
+          'recipientId': userId,
+          'time': timestamp,
+          'isEncrypted': false, // Adjust based on your message encryption logic
+          'isDeleted': false,
+          'isRead': false,
+          'isForwarded': true, // Mark the message as forwarded
+        };
+
+        // Send the forwarded message
+        await messagesRef.add(forwardedMessageData);
+
+        // Update the conversation document with the last message info
+        await conversationRef.set({
+          'participants': [currentUserUid, userId],
+          'lastMessage': messageToForward,
+          'lastMessageTimestamp': timestamp,
+          'unreadMessages': {
+            userId: FieldValue.increment(1),
+            currentUserUid: 0,
+          },
+          'totalMessages': FieldValue.increment(1),
+        }, SetOptions(merge: true));
+      }
+
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Message forwarded to selected users!')));
+    }
+  }
+
+// Helper method to check if an existing conversation exists and return its conversationId
+  Future<String> _getExistingConversationId(
+      String currentUserUid, String targetUserId) async {
+    // Sort the user IDs to ensure consistency in conversation ID
+    List<String> sortedIds = [currentUserUid, targetUserId]..sort();
+    String conversationId = sortedIds.join('_');
+
+    // Check if a conversation with the generated ID already exists
+    DocumentSnapshot conversationSnapshot = await FirebaseFirestore.instance
+        .collection('conversations')
+        .doc(conversationId)
+        .get();
+
+    // If the conversation exists, return the existing conversationId
+    if (conversationSnapshot.exists) {
+      return conversationId;
+    } else {
+      // If no conversation exists, generate a new one (this case should be rare)
+      return conversationId;
+    }
+  }
+
+  // Helper method to generate a conversation ID between two users
+  String _generateConversationId(String currentUserUid, String targetUserId) {
+    // Sort the user IDs to ensure consistency in conversation ID
+    List<String> sortedIds = [currentUserUid, targetUserId]..sort();
+    return sortedIds.join('_');
+  }
+
+  void _confirmAddParticipants() async {
+    // Check if any users are selected
+    if (selectedUserIds.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No participants selected!')),
+      );
+      return;
+    }
+
+    // Add selected participants to the group (update Firestore)
+    try {
+      await FirebaseFirestore.instance
+          .collection('conversations')
+          .doc(widget.conversationId)
+          .update({
+        'participants': FieldValue.arrayUnion(selectedUserIds.toList()),
+      });
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Participants added successfully!')),
+      );
+
+      // Navigate back or pop the screen to return to the group chat
+      Navigator.pop(context); // Pop to return to previous screen
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error adding participants: $e')),
+      );
+    }
   }
 
   @override
@@ -97,19 +210,30 @@ class _ConnectionsScreenState extends State<ConnectionsScreen> {
         title: const Text("Connections", style: TextStyle(color: Colors.white)),
         backgroundColor: AppColors.blackIndigoDark,
         actions: [
-          if (selectedUserIds.isNotEmpty) // Show create group button if users are selected
+          if (selectedUserIds.isNotEmpty &&
+              !widget.isAddingParticipants) // Disable if adding participants
             IconButton(
               icon: const Icon(Icons.group_add),
-              onPressed: _createGroupChat,
+              onPressed: widget.isAddingParticipants
+                  ? null
+                  : _createGroupChat, // Disable if adding participants
             ),
           if (widget.messageToForward.isNotEmpty)
             IconButton(
               icon: const Icon(Icons.send),
-              onPressed: _createGroupChat, // Forward message to group chat
+              onPressed: () => _forwardMessageToUsers(
+                  List<String>.from(selectedUserIds),
+                  widget.messageToForward), // Forward message to selected users
+            ),
+          if (widget.isAddingParticipants)
+            IconButton(
+              icon: const Icon(Icons.check),
+              onPressed:
+                  _confirmAddParticipants, // Call method to confirm addition
             ),
         ],
       ),
-      body: FutureBuilder<List<Map<String, dynamic>>>( 
+      body: FutureBuilder<List<Map<String, dynamic>>>(
         future: getConnections(),
         builder: (context, snapshot) {
           if (snapshot.connectionState == ConnectionState.waiting) {
@@ -141,8 +265,13 @@ class _ConnectionsScreenState extends State<ConnectionsScreen> {
                 child: ListTile(
                   contentPadding: const EdgeInsets.fromLTRB(16, 0, 16, 0),
                   title: Text(connection['username'],
-                      style: const TextStyle(color: Colors.white, fontSize: 18.0, fontWeight: FontWeight.bold)),
-                  subtitle: Text('Tap to chat', style: TextStyle(color: Colors.grey[400], fontSize: 14.0)),
+                      style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 18.0,
+                          fontWeight: FontWeight.bold)),
+                  subtitle: Text('Tap to chat',
+                      style:
+                          TextStyle(color: Colors.grey[400], fontSize: 14.0)),
                   trailing: Checkbox(
                     value: selectedUserIds.contains(connection['uid']),
                     onChanged: (bool? value) {
@@ -157,7 +286,8 @@ class _ConnectionsScreenState extends State<ConnectionsScreen> {
                   ),
                   onTap: () {
                     if (widget.messageToForward.isEmpty) {
-                      String currentUserUid = FirebaseAuth.instance.currentUser!.uid;
+                      String currentUserUid =
+                          FirebaseAuth.instance.currentUser!.uid;
                       Navigator.push(
                         context,
                         MaterialPageRoute(

@@ -46,10 +46,11 @@ class _ConnectionsScreenState extends State<ConnectionsScreen> {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   // Method to create the group chat
   void _createGroupChat() async {
-    if (selectedUserIds.isEmpty) {
+    if (selectedUserIds.isEmpty || selectedUserIds.length < 2) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-            content: Text('Please select at least one user to create a group')),
+            content:
+                Text('Please select at least two users to create a group')),
       );
       return;
     }
@@ -57,6 +58,14 @@ class _ConnectionsScreenState extends State<ConnectionsScreen> {
     String currentUserUid = FirebaseAuth.instance.currentUser!.uid;
     selectedUserIds.add(currentUserUid);
     adminUserIds.add(currentUserUid);
+
+    // Show an AlertDialog to input the group name
+    String groupName = await _showGroupNameDialog();
+
+    if (groupName.isEmpty) {
+      // If no group name is provided, set a default name
+      groupName = 'Group Chat';
+    }
 
     String groupId = selectedUserIds
         .toList()
@@ -70,7 +79,7 @@ class _ConnectionsScreenState extends State<ConnectionsScreen> {
     await groupChatRef.set({
       'participants': List<String>.from(selectedUserIds),
       'admins': List<String>.from(adminUserIds),
-      'groupName': 'Group Chat', // Customize if needed
+      'groupName': groupName, // Set the entered group name
       'lastMessage': widget.messageToForward,
       'lastMessageTimestamp': DateTime.now().millisecondsSinceEpoch,
       'unreadMessages': {currentUserUid: 0},
@@ -85,11 +94,48 @@ class _ConnectionsScreenState extends State<ConnectionsScreen> {
           groupId: groupId,
           participantIds: List<String>.from(selectedUserIds),
           adminIds: List<String>.from(adminUserIds),
-          groupName: 'Group Chat', // Customize if needed
+          groupName: groupName, // Pass the entered group name
           currentUserUid: currentUserUid,
         ),
       ),
     );
+  }
+
+// Function to show AlertDialog to input group name
+  Future<String> _showGroupNameDialog() async {
+    String groupName = '';
+
+    await showDialog<String>(
+      context: context,
+      builder: (BuildContext context) {
+        TextEditingController _controller = TextEditingController();
+
+        return AlertDialog(
+          title: const Text('Enter Group Name'),
+          content: TextField(
+            controller: _controller,
+            decoration: const InputDecoration(hintText: 'Group Name'),
+          ),
+          actions: <Widget>[
+            TextButton(
+              onPressed: () {
+                Navigator.pop(context); // Close the dialog
+              },
+              child: const Text('Cancel'),
+            ),
+            TextButton(
+              onPressed: () {
+                groupName = _controller.text.trim();
+                Navigator.pop(context); // Close the dialog
+              },
+              child: const Text('OK'),
+            ),
+          ],
+        );
+      },
+    );
+
+    return groupName;
   }
 
   Future _forwardMessageToUsers(

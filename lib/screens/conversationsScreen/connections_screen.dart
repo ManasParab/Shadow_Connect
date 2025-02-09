@@ -2,11 +2,11 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:shadow_connect/constants/colors.dart';
+import 'package:shadow_connect/screens/conversationsScreen/group_chat_screen.dart';
 import 'chat_screen.dart';
 
 class ConnectionsScreen extends StatefulWidget {
-  final String
-      messageToForward; // Content to forward, defaulting to an empty string if not provided
+  final String messageToForward;
   const ConnectionsScreen({super.key, this.messageToForward = ''});
 
   @override
@@ -14,82 +14,79 @@ class ConnectionsScreen extends StatefulWidget {
 }
 
 class _ConnectionsScreenState extends State<ConnectionsScreen> {
-  bool isForwarding = false; // Flag to track if forwarding is in progress
-  Set<String> selectedUserIds = {}; // Store selected user IDs
+  Set<String> selectedUserIds = {};
 
+  // Optimized method to fetch connections
   Future<List<Map<String, dynamic>>> getConnections() async {
     String currentUserUid = FirebaseAuth.instance.currentUser!.uid;
-
     var snapshot = await FirebaseFirestore.instance
         .collection('users')
         .doc(currentUserUid)
         .collection('connections')
         .get();
 
-    return snapshot.docs
-        .map((doc) => {
-              'username': doc['username'],
-              'uid': doc['uid'],
-            })
-        .toList();
+    return snapshot.docs.map((doc) {
+      return {
+        'username': doc['username'],
+        'uid': doc['uid'],
+      };
+    }).toList();
   }
 
-  void _sendForwardedMessages() {
+  // Method to create the group chat
+  void _createGroupChat() async {
     if (selectedUserIds.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-            content: Text('Please select at least one user to forward')),
+        const SnackBar(content: Text('Please select at least one user to create a group')),
       );
       return;
     }
 
-    // Logic to forward the message to selected users
-    selectedUserIds.forEach((recipientUid) async {
-      // Generate a unique conversation ID using the sender and recipient UIDs
-      String senderUid = FirebaseAuth.instance.currentUser!.uid;
-      String conversationId = senderUid.compareTo(recipientUid) < 0
-          ? '$senderUid' '_' '$recipientUid'
-          : '$recipientUid' '_' '$senderUid';
+    String currentUserUid = FirebaseAuth.instance.currentUser!.uid;
+    selectedUserIds.add(currentUserUid);
 
-      // Reference to the conversation and messages sub-collection
-      DocumentReference conversationRef = FirebaseFirestore.instance
-          .collection('conversations')
-          .doc(conversationId);
-      CollectionReference messagesRef = conversationRef.collection('messages');
+    String groupId = selectedUserIds.toList().join('_'); // Combine selected UIDs to form a unique group ID
 
-      // Create the message data
+    // Create group chat data
+    DocumentReference groupChatRef = FirebaseFirestore.instance.collection('conversations').doc(groupId);
 
-      Map<String, dynamic> messageData = {
+    // Create group chat if it doesn't exist
+    await groupChatRef.set({
+      'participants': List<String>.from(selectedUserIds),
+      'groupName': 'Group Chat', // Customize if needed
+      'lastMessage': widget.messageToForward,
+      'lastMessageTimestamp': DateTime.now().millisecondsSinceEpoch,
+      'unreadMessages': {currentUserUid: 0},
+      'totalMessages': 0,
+    });
+
+    // Add the forwarded message (if any)
+    if (widget.messageToForward.isNotEmpty) {
+      await groupChatRef.collection('messages').add({
         'message': widget.messageToForward,
-        'senderId': senderUid,
-        'recipientId': recipientUid,
+        'senderId': currentUserUid,
         'time': DateTime.now().millisecondsSinceEpoch,
         'isEncrypted': false,
         'isDeleted': false,
         'isRead': false,
-        'isForwarded': true, // Mark the message as forwarded
-      };
+        'isForwarded': true,
+      });
+    }
 
-      // Add the message to the messages sub-collection
-      await messagesRef.add(messageData);
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Group chat created!')));
 
-      // Update the conversation with the last message details
-      await conversationRef.set({
-        'participants': [senderUid, recipientUid],
-        'lastMessage': widget.messageToForward,
-        'lastMessageTimestamp': DateTime.now().millisecondsSinceEpoch,
-        'unreadMessages': {
-          recipientUid: FieldValue.increment(1),
-          senderUid: 0,
-        },
-        'totalMessages': FieldValue.increment(1), // Increment totalMessages
-      }, SetOptions(merge: true));
-    });
-
-    ScaffoldMessenger.of(context)
-        .showSnackBar(const SnackBar(content: Text('Messages forwarded!')));
-
-    Navigator.pop(context);
+    // Navigate to the group chat screen with updated parameters
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => GroupChatScreen(
+          groupId: groupId,
+          participantIds: List<String>.from(selectedUserIds),
+          groupName: 'Group Chat', // Customize if needed
+          currentUserUid: currentUserUid,
+        ),
+      ),
+    );
   }
 
   @override
@@ -97,21 +94,22 @@ class _ConnectionsScreenState extends State<ConnectionsScreen> {
     return Scaffold(
       backgroundColor: AppColors.blackIndigoDark,
       appBar: AppBar(
-        title: const Text(
-          "Connections",
-          style: TextStyle(color: Colors.white),
-        ),
+        title: const Text("Connections", style: TextStyle(color: Colors.white)),
         backgroundColor: AppColors.blackIndigoDark,
         actions: [
-          if (widget.messageToForward
-              .isNotEmpty) // Show the send button only when forwarding
+          if (selectedUserIds.isNotEmpty) // Show create group button if users are selected
+            IconButton(
+              icon: const Icon(Icons.group_add),
+              onPressed: _createGroupChat,
+            ),
+          if (widget.messageToForward.isNotEmpty)
             IconButton(
               icon: const Icon(Icons.send),
-              onPressed: _sendForwardedMessages,
+              onPressed: _createGroupChat, // Forward message to group chat
             ),
         ],
       ),
-      body: FutureBuilder<List<Map<String, dynamic>>>(
+      body: FutureBuilder<List<Map<String, dynamic>>>( 
         future: getConnections(),
         builder: (context, snapshot) {
           if (snapshot.connectionState == ConnectionState.waiting) {
@@ -142,44 +140,24 @@ class _ConnectionsScreenState extends State<ConnectionsScreen> {
                 color: AppColors.blackIndigoLight,
                 child: ListTile(
                   contentPadding: const EdgeInsets.fromLTRB(16, 0, 16, 0),
-                  title: Text(
-                    connection['username'],
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 18.0,
-                      fontWeight: FontWeight.bold,
-                    ),
+                  title: Text(connection['username'],
+                      style: const TextStyle(color: Colors.white, fontSize: 18.0, fontWeight: FontWeight.bold)),
+                  subtitle: Text('Tap to chat', style: TextStyle(color: Colors.grey[400], fontSize: 14.0)),
+                  trailing: Checkbox(
+                    value: selectedUserIds.contains(connection['uid']),
+                    onChanged: (bool? value) {
+                      setState(() {
+                        if (value == true) {
+                          selectedUserIds.add(connection['uid']);
+                        } else {
+                          selectedUserIds.remove(connection['uid']);
+                        }
+                      });
+                    },
                   ),
-                  subtitle: Text(
-                    'Tap to chat',
-                    style: TextStyle(
-                      color: Colors.grey[400],
-                      fontSize: 14.0,
-                    ),
-                  ),
-                  trailing: widget.messageToForward.isNotEmpty
-                      ? Checkbox(
-                          value: selectedUserIds.contains(connection['uid']),
-                          onChanged: (bool? value) {
-                            setState(() {
-                              if (value == true) {
-                                if (selectedUserIds.length < 15) {
-                                  selectedUserIds.add(connection['uid']);
-                                }
-                              } else {
-                                selectedUserIds.remove(connection['uid']);
-                              }
-                            });
-                          },
-                        )
-                      : const Icon(
-                          Icons.chat_bubble_outline,
-                          color: Colors.white,
-                        ),
                   onTap: () {
                     if (widget.messageToForward.isEmpty) {
-                      String currentUserUid =
-                          FirebaseAuth.instance.currentUser!.uid;
+                      String currentUserUid = FirebaseAuth.instance.currentUser!.uid;
                       Navigator.push(
                         context,
                         MaterialPageRoute(

@@ -4,6 +4,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:shadow_connect/constants/colors.dart';
 import 'connections_screen.dart';
 import 'chat_screen.dart';
+import 'group_chat_screen.dart';
 
 class ConversationsScreen extends StatelessWidget {
   const ConversationsScreen({super.key});
@@ -20,22 +21,13 @@ class ConversationsScreen extends StatelessWidget {
       return snapshot.docs.map((doc) {
         var data = doc.data();
 
-        // Get recipient UID
-        List<String> participants = List<String>.from(data['participants']);
-        String recipientUid = participants
-            .firstWhere((uid) => uid != currentUserUid, orElse: () => '');
-
-        // Fetch the latest message and unread count
-        String latestMessage = data['lastMessage'] ?? 'No messages yet';
-        int timestamp = data['lastMessageTimestamp'] ?? 0;
-        int unreadCount = data['unreadMessages']?[currentUserUid] ?? 0;
-
         return {
           'conversationId': doc.id,
-          'recipientUid': recipientUid,
-          'latestMessage': latestMessage,
-          'timestamp': timestamp,
-          'unreadCount': unreadCount,
+          'groupName': data.containsKey('groupName') ? data['groupName'] : null,
+          'participants': List<String>.from(data['participants']),
+          'latestMessage': data['lastMessage'] ?? 'No messages yet',
+          'timestamp': data['lastMessageTimestamp'] ?? 0,
+          'unreadCount': data['unreadMessages']?[currentUserUid] ?? 0,
         };
       }).toList();
     });
@@ -72,96 +64,164 @@ class ConversationsScreen extends StatelessWidget {
           }
 
           var conversations = snapshot.data!;
-          conversations
-              .sort((a, b) => b['timestamp'].compareTo(a['timestamp']));
+          conversations.sort((a, b) => b['timestamp'].compareTo(a['timestamp']));
 
           return ListView.builder(
             itemCount: conversations.length,
             itemBuilder: (context, index) {
               var conversation = conversations[index];
 
-              return FutureBuilder<DocumentSnapshot>(
-                future: FirebaseFirestore.instance
-                    .collection('users')
-                    .doc(conversation['recipientUid'])
-                    .get(),
-                builder: (context, userSnapshot) {
-                  if (!userSnapshot.hasData || !userSnapshot.data!.exists) {
-                    return Container(); // Skip if user not found
-                  }
-                  var userData = userSnapshot.data!;
-                  String recipientUsername = userData['username'];
-
-                  return Card(
-                    elevation: 4.0,
-                    margin:
-                        const EdgeInsets.symmetric(vertical: 4, horizontal: 10),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(10.0),
+              if (conversation['groupName'] != null) {
+                // Group Chat Item
+                return Card(
+                  elevation: 4.0,
+                  margin: const EdgeInsets.symmetric(vertical: 4, horizontal: 10),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(10.0),
+                  ),
+                  color: AppColors.blackIndigoLight,
+                  child: ListTile(
+                    contentPadding: const EdgeInsets.fromLTRB(16, 0, 16, 0),
+                    title: Text(
+                      conversation['groupName'],
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 18.0,
+                        fontWeight: FontWeight.bold,
+                      ),
                     ),
-                    color: AppColors.blackIndigoLight,
-                    child: ListTile(
-                      contentPadding: const EdgeInsets.fromLTRB(16, 0, 16, 0),
-                      title: Text(
-                        recipientUsername,
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 18.0,
-                          fontWeight: FontWeight.bold,
-                        ),
+                    subtitle: Text(
+                      conversation['latestMessage'].length > 30
+                          ? "${conversation['latestMessage'].substring(0, 30)}..." // Truncate
+                          : conversation['latestMessage'],
+                      style: TextStyle(
+                        color: Colors.grey[400],
+                        fontSize: 14.0,
                       ),
-                      subtitle: Text(
-                        conversation['latestMessage'].length > 30
-                            ? "${conversation['latestMessage'].substring(0, 30)}..." // Truncate
-                            : conversation['latestMessage'],
-                        style: TextStyle(
-                          color: Colors.grey[400],
-                          fontSize: 14.0,
-                        ),
-                      ),
-                      trailing: conversation['unreadCount'] > 0
-                          ? Container(
-                              padding: const EdgeInsets.all(8),
-                              decoration: BoxDecoration(
-                                color: Colors.red,
-                                borderRadius: BorderRadius.circular(12),
-                              ),
-                              child: Text(
-                                "${conversation['unreadCount']}",
-                                style: const TextStyle(
-                                  color: Colors.white,
-                                  fontWeight: FontWeight.bold,
-                                ),
-                              ),
-                            )
-                          : const SizedBox(), // If no unread messages, show nothing
-                      onTap: () {
-                        String currentUserUid =
-                            FirebaseAuth.instance.currentUser!.uid;
-
-                        // Reset unread count to 0 when opening chat
-                        FirebaseFirestore.instance
-                            .collection('conversations')
-                            .doc(conversation['conversationId'])
-                            .update({'unreadMessages.$currentUserUid': 0});
-
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (context) => ChatScreen(
-                              uid: currentUserUid, // Pass current user's UID
-                              recipientUid: conversation[
-                                  'recipientUid'], // Pass recipient UID
-                              recipientUsername:
-                                  recipientUsername, // Pass recipient username
+                    ),
+                    trailing: conversation['unreadCount'] > 0
+                        ? Container(
+                            padding: const EdgeInsets.all(8),
+                            decoration: BoxDecoration(
+                              color: Colors.red,
+                              borderRadius: BorderRadius.circular(12),
                             ),
+                            child: Text(
+                              "${conversation['unreadCount']}",
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          )
+                        : const SizedBox(), // If no unread messages, show nothing
+                    onTap: () {
+                      String currentUserUid = FirebaseAuth.instance.currentUser!.uid;
+
+                      // Reset unread count for the group chat
+                      FirebaseFirestore.instance
+                          .collection('conversations')
+                          .doc(conversation['conversationId'])
+                          .update({'unreadMessages.$currentUserUid': 0});
+
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (context) => GroupChatScreen(
+                            groupId: conversation['conversationId'],
+                            participantIds: conversation['participants'],
+                            groupName: conversation['groupName'],
+                            currentUserUid: currentUserUid,
                           ),
-                        );
-                      },
-                    ),
-                  );
-                },
-              );
+                        ),
+                      );
+                    },
+                  ),
+                );
+              } else {
+                // Private Chat Item
+                return FutureBuilder<DocumentSnapshot>(
+                  future: FirebaseFirestore.instance
+                      .collection('users')
+                      .doc(conversation['participants']
+                          .firstWhere((uid) => uid != FirebaseAuth.instance.currentUser!.uid))
+                      .get(),
+                  builder: (context, userSnapshot) {
+                    if (!userSnapshot.hasData || !userSnapshot.data!.exists) {
+                      return Container(); // Skip if user not found
+                    }
+
+                    var userData = userSnapshot.data!;
+                    String recipientUsername = userData['username'];
+                    String recipientUid = userData.id;
+
+                    return Card(
+                      elevation: 4.0,
+                      margin: const EdgeInsets.symmetric(vertical: 4, horizontal: 10),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(10.0),
+                      ),
+                      color: AppColors.blackIndigoLight,
+                      child: ListTile(
+                        contentPadding: const EdgeInsets.fromLTRB(16, 0, 16, 0),
+                        title: Text(
+                          recipientUsername,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 18.0,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        subtitle: Text(
+                          conversation['latestMessage'].length > 30
+                              ? "${conversation['latestMessage'].substring(0, 30)}..." // Truncate
+                              : conversation['latestMessage'],
+                          style: TextStyle(
+                            color: Colors.grey[400],
+                            fontSize: 14.0,
+                          ),
+                        ),
+                        trailing: conversation['unreadCount'] > 0
+                            ? Container(
+                                padding: const EdgeInsets.all(8),
+                                decoration: BoxDecoration(
+                                  color: Colors.red,
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                                child: Text(
+                                  "${conversation['unreadCount']}",
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                              )
+                            : const SizedBox(), // If no unread messages, show nothing
+                        onTap: () {
+                          String currentUserUid = FirebaseAuth.instance.currentUser!.uid;
+
+                          // Reset unread count for private chat
+                          FirebaseFirestore.instance
+                              .collection('conversations')
+                              .doc(conversation['conversationId'])
+                              .update({'unreadMessages.$currentUserUid': 0});
+
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (context) => ChatScreen(
+                                uid: currentUserUid, // Pass current user's UID
+                                recipientUid: recipientUid, // Pass recipient UID
+                                recipientUsername: recipientUsername, // Pass recipient username
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+                    );
+                  },
+                );
+              }
             },
           );
         },

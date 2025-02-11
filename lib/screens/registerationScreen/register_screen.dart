@@ -27,6 +27,39 @@ class _RegisterScreenState extends State<RegisterScreen> {
     return doc.exists;
   }
 
+  void getFCMToken() async {
+    String? token = await FirebaseMessaging.instance.getToken();
+    print("FCM Device Token: $token");
+
+    // Store the FCM token in Firestore if the user is logged in
+    if (token != null) {
+      User? user = FirebaseAuth.instance.currentUser;
+      if (user != null) {
+        // Get the user's UID
+        String uid = user.uid;
+        FirebaseFirestore firestore = FirebaseFirestore.instance;
+
+        // Reference to the user's document in Firestore
+        DocumentReference userRef = firestore.collection("users").doc(uid);
+
+        // Fetch the current document
+        DocumentSnapshot userDoc = await userRef.get();
+
+        if (userDoc.exists) {
+          // If the user document exists, update the fcmTokens array
+          await userRef.update({
+            "fcmTokens": FieldValue.arrayUnion([token])
+          });
+        } else {
+          // If the document does not exist, create it with the fcmTokens array
+          await userRef.set({
+            "fcmTokens": [token],
+          });
+        }
+      }
+    }
+  }
+
   Future<void> _registerUser() async {
     String email = emailController.text.trim();
     String password = passwordController.text.trim();
@@ -80,6 +113,9 @@ class _RegisterScreenState extends State<RegisterScreen> {
         await firestore.collection("usernames").doc(username).set({
           "uid": uid,
         });
+
+        // Call getFCMToken to store the FCM token in Firestore
+        getFCMToken();
 
         Navigator.pushReplacement(
           context,

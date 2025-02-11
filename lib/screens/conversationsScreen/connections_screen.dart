@@ -211,42 +211,71 @@ class _ConnectionsScreenState extends State<ConnectionsScreen> {
   }
 
   // Helper method to generate a conversation ID between two users
-  String _generateConversationId(String currentUserUid, String targetUserId) {
-    // Sort the user IDs to ensure consistency in conversation ID
-    List<String> sortedIds = [currentUserUid, targetUserId]..sort();
-    return sortedIds.join('_');
-  }
 
   void _confirmAddParticipants() async {
-    // Check if any users are selected
-    if (selectedUserIds.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('No participants selected!')),
-      );
-      return;
+  // Check if any users are selected
+  if (selectedUserIds.isEmpty) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('No participants selected!')),
+    );
+    return;
+  }
+
+  // Add selected participants to the group (update Firestore)
+  try {
+    // First, fetch the current unreadMessages map from Firestore
+    DocumentSnapshot groupDoc = await FirebaseFirestore.instance
+        .collection('conversations')
+        .doc(widget.conversationId)
+        .get();
+
+    Map<String, dynamic> groupData = groupDoc.data() as Map<String, dynamic>;
+    Map<String, dynamic> currentUnreadMessages = Map<String, dynamic>.from(groupData['unreadMessages'] ?? {});
+
+    // Add selected participants to the group (update participants array)
+    await FirebaseFirestore.instance
+        .collection('conversations')
+        .doc(widget.conversationId)
+        .update({
+      'participants': FieldValue.arrayUnion(selectedUserIds.toList()), // Add participants to the array
+    });
+
+    // Update unreadMessages map with the new participants without overwriting existing data
+    Map<String, dynamic> unreadMessagesMap = {};
+    for (String userId in selectedUserIds) {
+      // Only add the user to unreadMessages if they don't already exist in the map
+      if (!currentUnreadMessages.containsKey(userId)) {
+        unreadMessagesMap[userId] = 0; // Initialize unread message count for each new participant
+      }
     }
 
-    // Add selected participants to the group (update Firestore)
-    try {
+    if (unreadMessagesMap.isNotEmpty) {
+      // Merge the new unreadMessages data with the existing data
       await FirebaseFirestore.instance
           .collection('conversations')
           .doc(widget.conversationId)
           .update({
-        'participants': FieldValue.arrayUnion(selectedUserIds.toList()),
+        'unreadMessages': {
+          ...currentUnreadMessages, // Keep existing unreadMessages
+          ...unreadMessagesMap, // Add new unreadMessages entries
+        },
       });
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Participants added successfully!')),
-      );
-
-      // Navigate back or pop the screen to return to the group chat
-      Navigator.pop(context); // Pop to return to previous screen
-    } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error adding participants: $e')),
-      );
     }
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Participants added successfully!')),
+    );
+
+    // Navigate back or pop the screen to return to the group chat
+    Navigator.pop(context); // Pop to return to previous screen
+  } catch (e) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Error adding participants: $e')),
+    );
   }
+}
+
+
 
   @override
   Widget build(BuildContext context) {

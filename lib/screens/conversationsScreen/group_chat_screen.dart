@@ -75,12 +75,13 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
   Future _sendMessage(String message, bool isEncrypted) async {
     final timestamp = DateTime.now().millisecondsSinceEpoch;
     String messageToSend = message;
+
     if (isEncrypted) {
       messageToSend = encryptMessage(message);
     }
 
     DocumentReference conversationRef =
-        _firestore.collection('conversations').doc(conversationId);
+        _firestore.collection('conversations').doc(widget.groupId);
     CollectionReference messagesRef = conversationRef.collection('messages');
 
     Map<String, dynamic> messageData = {
@@ -93,14 +94,26 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
       'isForwarded': false,
     };
 
+    // Add the message to the messages sub-collection
     await messagesRef.add(messageData);
 
+    // Update the conversation's last message and total message count
     await conversationRef.set({
       'participants': widget.participantIds,
       'lastMessage': messageToSend,
       'lastMessageTimestamp': timestamp,
       'totalMessages': FieldValue.increment(1),
     }, SetOptions(merge: true));
+
+    // Update the unreadMessages count for each participant (except the sender)
+    for (String participantId in widget.participantIds) {
+      if (participantId != widget.currentUserUid) {
+        // Increment the unreadMessages count for this participant
+        await conversationRef.update({
+          'unreadMessages.$participantId': FieldValue.increment(1),
+        });
+      }
+    }
 
     Future.delayed(const Duration(milliseconds: 300), () {
       _scrollToBottom();
@@ -125,6 +138,10 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
         .collection('messages')
         .doc(messageId)
         .update({'isRead': true});
+
+    await _firestore.collection('conversations').doc(conversationId).update({
+      'unreadMessages.${widget.currentUserUid}': FieldValue.increment(-1),
+    });
   }
 
   Future _authenticateUser() async {
@@ -380,7 +397,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
       MaterialPageRoute(
         builder: (context) => ConnectionsScreen(
           isAddingParticipants: true,
-          conversationId: conversationId, // Pass the flag
+          conversationId: widget.groupId, // Pass the flag
         ),
       ),
     );
@@ -393,9 +410,14 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
       try {
         await _firestore
             .collection('conversations')
-            .doc(conversationId)
+            .doc(widget.groupId)
             .update({
           'participants': FieldValue.arrayUnion(selectedUsers),
+        });
+
+        // Update the state with the new participants
+        setState(() {
+          widget.participantIds.addAll(selectedUsers); // Update the local state
         });
 
         ScaffoldMessenger.of(context).showSnackBar(
@@ -434,8 +456,15 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
         return;
       }
 
+      // Remove participant from participants array
       await _firestore.collection('conversations').doc(conversationId).update({
         'participants': FieldValue.arrayRemove([participantUid]),
+      });
+
+      // Remove participant from unreadMessages map
+      await _firestore.collection('conversations').doc(conversationId).update({
+        'unreadMessages': FieldValue.arrayRemove(
+            [participantUid]), // Remove from unreadMessages map
       });
 
       ScaffoldMessenger.of(context).showSnackBar(

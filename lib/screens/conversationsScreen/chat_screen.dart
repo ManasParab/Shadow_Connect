@@ -7,6 +7,7 @@ import 'package:local_auth/local_auth.dart';
 import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
 import 'connections_screen.dart';
+import 'package:google_mlkit_translation/google_mlkit_translation.dart';
 
 class ChatScreen extends StatefulWidget {
   final String uid;
@@ -25,6 +26,19 @@ class ChatScreen extends StatefulWidget {
 }
 
 class _ChatScreenState extends State<ChatScreen> {
+  Map<String, bool> messageTranslationState = {};
+  Map<String, String> translatedMessages =
+      {}; // Map to store translated messages
+
+  String selectedLanguage = 'English';
+  Map<String, String> supportedLanguages = {
+    'English': 'en',
+    'Spanish': 'es',
+    'French': 'fr',
+    'German': 'de',
+    'Hindi': 'Hn',
+    'Marathi': 'Ma',
+  };
   final TextEditingController _controller = TextEditingController();
   final ScrollController _scrollController = ScrollController();
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
@@ -35,10 +49,17 @@ class _ChatScreenState extends State<ChatScreen> {
   final _iv = encrypt.IV.fromLength(16);
 
   Set<String> _selectedMessages = {}; // Keep track of selected messages
+  bool _hasScrolledToBottom = false; // Flag to track if scrolled to bottom
+  bool _isAuthenticating = false; // Added for authentication check
+  double _dragOffset = 0.0; // Variable to track the drag offset
 
   @override
   void initState() {
     super.initState();
+    // Call _scrollToBottom when the conversation is opened
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _scrollToBottom();
+    });
   }
 
   String get conversationId {
@@ -169,6 +190,64 @@ class _ChatScreenState extends State<ChatScreen> {
     } catch (e) {
       print('Decryption failed: $e');
       return '';
+    }
+  }
+
+  Future<String> translateMessage(
+    String messageContent,
+    String targetLanguage,
+    String messageId, // pass the message ID to update its state
+  ) async {
+    // Set translation state to true (translation in progress)
+    setState(() {
+      messageTranslationState[messageId] = true;
+    });
+
+    final supportedLanguages = {
+      "Spanish": TranslateLanguage.spanish,
+      "French": TranslateLanguage.french,
+      "German": TranslateLanguage.german,
+      "Chinese": TranslateLanguage.chinese,
+      "Hindi": TranslateLanguage.hindi,
+      "Marathi": TranslateLanguage.marathi
+    };
+
+    // Check if the selected language is valid
+    if (!supportedLanguages.containsKey(targetLanguage)) {
+      setState(() {
+        messageTranslationState[messageId] = false; // Reset on error
+      });
+      return "Error: Unsupported language";
+    }
+
+    final targetTranslateLanguage = supportedLanguages[targetLanguage]!;
+
+    // Initialize the translator
+    final onDeviceTranslator = OnDeviceTranslator(
+      sourceLanguage: TranslateLanguage.english,
+      targetLanguage: targetTranslateLanguage,
+    );
+
+    try {
+      // Perform translation
+      String translatedMessage =
+          await onDeviceTranslator.translateText(messageContent);
+
+      // Update the translated message in the map
+      setState(() {
+        translatedMessages[messageId] = translatedMessage;
+        messageTranslationState[messageId] =
+            false; // Reset once translation is done
+      });
+
+      return translatedMessage;
+    } catch (e) {
+      setState(() {
+        messageTranslationState[messageId] = false; // Reset on error
+      });
+      return "Error: ${e.toString()}";
+    } finally {
+      await onDeviceTranslator.close();
     }
   }
 
@@ -362,9 +441,10 @@ class _ChatScreenState extends State<ChatScreen> {
                 }
 
                 var messages = snapshot.data!.docs;
-                if (messages.isNotEmpty) {
+                if (messages.isNotEmpty && !_hasScrolledToBottom) {
                   Future.delayed(const Duration(milliseconds: 100), () {
                     _scrollToBottom();
+                    _hasScrolledToBottom = true; // Set the flag to true
                   });
                 }
 
@@ -393,19 +473,120 @@ class _ChatScreenState extends State<ChatScreen> {
                       child: StatefulBuilder(
                         builder: (context, setState) {
                           return GestureDetector(
+                            onHorizontalDragUpdate: (details) {
+                              // Restrict dragging direction based on sender
+                              if (isSender) {
+                                // Allow dragging only from right to left
+                                if (_dragOffset + details.delta.dx <= 0) {
+                                  setState(() {
+                                    _dragOffset += details
+                                        .delta.dx; // Move left for sender
+                                  });
+                                }
+                              } else {
+                                // Allow dragging only from left to right
+                                if (_dragOffset + details.delta.dx >= 0) {
+                                  setState(() {
+                                    _dragOffset += details
+                                        .delta.dx; // Move right for receiver
+                                  });
+                                }
+                              }
+                            },
+                            onHorizontalDragEnd: (details) async {
+                              // Reset the drag offset when the drag ends
+                              if (_dragOffset != 0) {
+                                if (isEncrypted) {
+                                  // Authenticate user if the message is encrypted
+                                  if (!_isAuthenticating) {
+                                    _isAuthenticating =
+                                        true; // Set the flag to true
+                                    bool authenticated =
+                                        await _authenticateUser();
+                                    if (authenticated) {
+                                      String decryptedMessage =
+                                          decryptMessage(messageContent);
+                                      if (decryptedMessage.isNotEmpty) {
+                                        // Translate the decrypted message
+                                        String translatedMessage =
+                                            await translateMessage(
+                                                decryptedMessage,
+                                                selectedLanguage,
+                                                messageId);
+                                        setState(() {
+                                          // Update the message bubble with the translated message
+                                          messageContent =
+                                              translatedMessage; // Update the message content
+                                        });
+                                      } else {
+                                        ScaffoldMessenger.of(context)
+                                            .showSnackBar(
+                                          const SnackBar(
+                                              content:
+                                                  Text('Decryption failed')),
+                                        );
+                                      }
+                                    } else {
+                                      ScaffoldMessenger.of(context)
+                                          .showSnackBar(
+                                        const SnackBar(
+                                            content:
+                                                Text('Authentication failed')),
+                                      );
+                                    }
+                                    _isAuthenticating =
+                                        false; // Reset the flag after authentication attempt
+                                  }
+                                } else {
+                                  // If not encrypted, just translate the message
+                                  String translatedMessage =
+                                      await translateMessage(messageContent,
+                                          selectedLanguage, messageId);
+                                  setState(() {
+                                    // Update the message bubble with the translated message
+                                    messageContent =
+                                        translatedMessage; // Update the message content
+                                  });
+                                }
+                                // Reset the drag offset after processing
+                                setState(() {
+                                  _dragOffset = 0.0;
+                                });
+                              }
+                            },
                             onLongPress: () async {
                               if (isEncrypted && !isDeleted) {
-                                bool authenticated = await _authenticateUser();
-                                if (authenticated) {
-                                  setState(() {
-                                    decryptedMessage =
+                                if (!_isAuthenticating) {
+                                  // Check if already authenticating
+                                  _isAuthenticating =
+                                      true; // Set the flag to true
+                                  bool authenticated =
+                                      await _authenticateUser();
+                                  if (authenticated) {
+                                    String decryptedMessage =
                                         decryptMessage(messageContent);
-                                  });
-                                } else {
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    const SnackBar(
-                                        content: Text('Authentication failed')),
-                                  );
+                                    if (decryptedMessage.isNotEmpty) {
+                                      // Update the message bubble with the decrypted message
+                                      setState(() {
+                                        messageContent =
+                                            decryptedMessage; // Update the message content
+                                      });
+                                    } else {
+                                      ScaffoldMessenger.of(context)
+                                          .showSnackBar(
+                                        const SnackBar(
+                                            content: Text('Decryption failed')),
+                                      );
+                                    }
+                                  } else {
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      const SnackBar(
+                                          content:
+                                              Text('Authentication failed')),
+                                    );
+                                  }
+                                  _isAuthenticating =
+                                      false; // Reset the flag after authentication attempt
                                 }
                               }
                             },
@@ -413,117 +594,142 @@ class _ChatScreenState extends State<ChatScreen> {
                                 _toggleMessageSelection(messageId),
                             onTap: () {
                               if (_selectedMessages.isEmpty) {
+                                // Perform any default action if no message is selected.
                               } else {
                                 _toggleMessageSelection(messageId);
                               }
                             },
-                            child: ListTile(
-                              contentPadding:
-                                  EdgeInsets.zero, // To avoid extra padding
-                              title: Row(
-                                mainAxisAlignment: isSender
-                                    ? MainAxisAlignment.end
-                                    : MainAxisAlignment.start,
-                                children: [
-                                  Container(
-                                    padding: const EdgeInsets.symmetric(
-                                        vertical: 8.0, horizontal: 12.0),
-                                    constraints: BoxConstraints(
-                                      maxWidth:
-                                          MediaQuery.of(context).size.width *
-                                              0.7,
-                                    ),
-                                    decoration: BoxDecoration(
-                                      color: isSender
-                                          ? AppColors.blackIndigoLight
-                                          : const Color.fromARGB(
-                                              255, 46, 46, 46),
-                                      borderRadius: BorderRadius.only(
-                                        topLeft: const Radius.circular(12.0),
-                                        topRight: const Radius.circular(12.0),
-                                        bottomLeft: isSender
-                                            ? const Radius.circular(12.0)
-                                            : Radius.zero,
-                                        bottomRight: isSender
-                                            ? Radius.zero
-                                            : const Radius.circular(12.0),
+                            child: Transform.translate(
+                              offset: Offset(
+                                  _dragOffset, 0), // Apply the drag offset
+                              child: ListTile(
+                                contentPadding: EdgeInsets.zero,
+                                title: Row(
+                                  mainAxisAlignment: isSender
+                                      ? MainAxisAlignment.end
+                                      : MainAxisAlignment.start,
+                                  children: [
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(
+                                          vertical: 8.0, horizontal: 12.0),
+                                      constraints: BoxConstraints(
+                                        maxWidth:
+                                            MediaQuery.of(context).size.width *
+                                                0.7,
                                       ),
-                                    ),
-                                    child: IntrinsicWidth(
-                                      child: Column(
-                                        mainAxisSize: MainAxisSize.min,
-                                        crossAxisAlignment: isSender
-                                            ? CrossAxisAlignment.end
-                                            : CrossAxisAlignment.start,
-                                        children: [
-                                          Row(
-                                            mainAxisSize: MainAxisSize.min,
-                                            children: [
-                                              if (isDeleted) ...[
-                                                const Icon(Icons.delete,
-                                                    color: Colors.grey,
-                                                    size: 16),
-                                                const SizedBox(width: 4),
+                                      decoration: BoxDecoration(
+                                        color: isSender
+                                            ? AppColors.blackIndigoLight
+                                            : const Color.fromARGB(
+                                                255, 46, 46, 46),
+                                        borderRadius: BorderRadius.only(
+                                          topLeft: const Radius.circular(12.0),
+                                          topRight: const Radius.circular(12.0),
+                                          bottomLeft: isSender
+                                              ? const Radius.circular(12.0)
+                                              : Radius.zero,
+                                          bottomRight: isSender
+                                              ? Radius.zero
+                                              : const Radius.circular(12.0),
+                                        ),
+                                      ),
+                                      child: IntrinsicWidth(
+                                        child: Column(
+                                          mainAxisSize: MainAxisSize.min,
+                                          crossAxisAlignment: isSender
+                                              ? CrossAxisAlignment.end
+                                              : CrossAxisAlignment.start,
+                                          children: [
+                                            Row(
+                                              mainAxisSize: MainAxisSize.min,
+                                              children: [
+                                                if (isDeleted) ...[
+                                                  const Icon(Icons.delete,
+                                                      color: Colors.grey,
+                                                      size: 16),
+                                                  const SizedBox(width: 4),
+                                                ],
+                                                Flexible(
+                                                  child: Stack(
+                                                    children: [
+                                                      if (messageTranslationState[
+                                                              messageId] ==
+                                                          true) // Show loading indicator
+                                                        const Align(
+                                                          alignment: Alignment
+                                                              .centerRight,
+                                                          child:
+                                                              CircularProgressIndicator(
+                                                            color: Colors.blue,
+                                                          ),
+                                                        ),
+                                                      Text(
+                                                        translatedMessages[
+                                                                messageId] ??
+                                                            messageContent, // Use the updated message content
+                                                        textAlign: isSender
+                                                            ? TextAlign.end
+                                                            : TextAlign.start,
+                                                        style: TextStyle(
+                                                          color: isDeleted
+                                                              ? Colors.grey
+                                                              : Colors.white,
+                                                          fontSize: 16,
+                                                          fontStyle: isDeleted
+                                                              ? FontStyle.italic
+                                                              : FontStyle
+                                                                  .normal,
+                                                        ),
+                                                      ),
+                                                    ],
+                                                  ),
+                                                ),
                                               ],
-                                              Flexible(
-                                                child: Text(
-                                                  decryptedMessage,
-                                                  textAlign: isSender
-                                                      ? TextAlign.end
-                                                      : TextAlign.start,
-                                                  style: TextStyle(
-                                                    color: isDeleted
-                                                        ? Colors.grey
-                                                        : Colors.white,
-                                                    fontSize: 16,
-                                                    fontStyle: isDeleted
-                                                        ? FontStyle.italic
-                                                        : FontStyle.normal,
+                                            ),
+                                            if (isSender)
+                                              Align(
+                                                alignment:
+                                                    Alignment.bottomRight,
+                                                child: Padding(
+                                                  padding:
+                                                      const EdgeInsets.only(
+                                                          top: 4.0),
+                                                  child: Text(
+                                                    isRead
+                                                        ? '✔✔ Read'
+                                                        : '✔ Sent',
+                                                    style: TextStyle(
+                                                      fontSize: 12,
+                                                      color: isRead
+                                                          ? Colors.blue
+                                                          : Colors.grey,
+                                                    ),
                                                   ),
                                                 ),
                                               ),
-                                            ],
-                                          ),
-                                          if (isSender)
                                             Align(
-                                              alignment: Alignment.bottomRight,
+                                              alignment: isSender
+                                                  ? Alignment.bottomRight
+                                                  : Alignment.bottomLeft,
                                               child: Padding(
                                                 padding: const EdgeInsets.only(
                                                     top: 4.0),
                                                 child: Text(
-                                                  isRead ? '✔✔ Read' : '✔ Sent',
-                                                  style: TextStyle(
-                                                    fontSize: 12,
-                                                    color: isRead
-                                                        ? Colors.blue
-                                                        : Colors.grey,
-                                                  ),
+                                                  formatTimestamp(DateTime
+                                                      .fromMillisecondsSinceEpoch(
+                                                          message['time'])),
+                                                  style: const TextStyle(
+                                                      fontSize: 12,
+                                                      color: Colors.grey),
                                                 ),
                                               ),
                                             ),
-                                          Align(
-                                            alignment: isSender
-                                                ? Alignment.bottomRight
-                                                : Alignment.bottomLeft,
-                                            child: Padding(
-                                              padding: const EdgeInsets.only(
-                                                  top: 4.0),
-                                              child: Text(
-                                                formatTimestamp(DateTime
-                                                    .fromMillisecondsSinceEpoch(
-                                                        message['time'])),
-                                                style: const TextStyle(
-                                                  fontSize: 12,
-                                                  color: Colors.grey,
-                                                ),
-                                              ),
-                                            ),
-                                          ),
-                                        ],
+                                          ],
+                                        ),
                                       ),
                                     ),
-                                  ),
-                                ],
+                                  ],
+                                ),
                               ),
                             ),
                           );
@@ -537,59 +743,90 @@ class _ChatScreenState extends State<ChatScreen> {
           ),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 6.0, vertical: 8.0),
-            child: Row(
-              children: [
-                Expanded(
-                  child: TextField(
-                    controller: _controller,
-                    style: const TextStyle(color: Colors.white),
-                    minLines: 1,
-                    maxLines: 5,
-                    decoration: InputDecoration(
-                      filled: true,
-                      fillColor: Colors.transparent,
-                      hintText: 'Message',
-                      hintStyle: const TextStyle(color: Colors.grey),
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(20.0),
-                        borderSide:
-                            const BorderSide(color: AppColors.blackIndigoLight),
+            child: ConstrainedBox(
+              constraints:
+                  BoxConstraints(maxWidth: MediaQuery.of(context).size.width),
+              child: Column(
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.all(8.0),
+                    child: DropdownButton<String>(
+                      value: selectedLanguage,
+                      isExpanded: true,
+                      items: supportedLanguages.keys.map((String language) {
+                        return DropdownMenuItem<String>(
+                          value: language,
+                          child: Text(language),
+                        );
+                      }).toList(),
+                      onChanged: (String? newValue) {
+                        setState(() {
+                          selectedLanguage = newValue!;
+                        });
+                      },
+                    ),
+                  ),
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.center,
+                    mainAxisSize: MainAxisSize
+                        .min, // Ensures the row shrinks to fit its children
+                    children: [
+                      Flexible(
+                        fit: FlexFit
+                            .loose, // Allows the TextField to use only the space it needs
+                        child: TextField(
+                          controller: _controller,
+                          style: const TextStyle(color: Colors.white),
+                          minLines: 1,
+                          maxLines: 5,
+                          decoration: InputDecoration(
+                            filled: true,
+                            fillColor: Colors.transparent,
+                            hintText: 'Message',
+                            hintStyle: const TextStyle(color: Colors.grey),
+                            border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(20.0),
+                              borderSide: const BorderSide(
+                                  color: AppColors.blackIndigoLight),
+                            ),
+                            contentPadding: const EdgeInsets.symmetric(
+                                vertical: 16.0, horizontal: 12.0),
+                          ),
+                          keyboardType: TextInputType.multiline,
+                          textInputAction: TextInputAction.newline,
+                          onEditingComplete: () {
+                            FocusScope.of(context).requestFocus(FocusNode());
+                          },
+                        ),
                       ),
-                      contentPadding: const EdgeInsets.symmetric(
-                          vertical: 16.0, horizontal: 12.0),
-                    ),
-                    keyboardType: TextInputType.multiline,
-                    textInputAction: TextInputAction.newline,
-                    onEditingComplete: () {
-                      FocusScope.of(context).requestFocus(FocusNode());
-                    },
+                      Padding(
+                        padding: const EdgeInsets.only(left: 8.0),
+                        child: GestureDetector(
+                          onLongPressStart: (_) {
+                            setState(() {
+                              _isSendingEncrypted = true;
+                            });
+                          },
+                          onLongPressEnd: (_) {
+                            sendMessage();
+                          },
+                          onTap: () {
+                            if (!_isSendingEncrypted) {
+                              sendMessage();
+                            }
+                          },
+                          child: FloatingActionButton(
+                            onPressed: () =>
+                                sendMessage(isEncrypted: _isSendingEncrypted),
+                            backgroundColor: AppColors.blackIndigoLight,
+                            child: const Icon(Icons.send, color: Colors.white),
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
-                ),
-                Padding(
-                  padding: const EdgeInsets.only(left: 8.0),
-                  child: GestureDetector(
-                    onLongPressStart: (_) {
-                      setState(() {
-                        _isSendingEncrypted = true;
-                      });
-                    },
-                    onLongPressEnd: (_) {
-                      sendMessage();
-                    },
-                    onTap: () {
-                      if (!_isSendingEncrypted) {
-                        sendMessage();
-                      }
-                    },
-                    child: FloatingActionButton(
-                      onPressed: () =>
-                          sendMessage(isEncrypted: _isSendingEncrypted),
-                      backgroundColor: AppColors.blackIndigoLight,
-                      child: const Icon(Icons.send, color: Colors.white),
-                    ),
-                  ),
-                ),
-              ],
+                ],
+              ),
             ),
           ),
         ],

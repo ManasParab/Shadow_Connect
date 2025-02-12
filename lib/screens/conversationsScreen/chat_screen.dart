@@ -52,6 +52,8 @@ class _ChatScreenState extends State<ChatScreen> {
   bool _hasScrolledToBottom = false; // Flag to track if scrolled to bottom
   bool _isAuthenticating = false; // Added for authentication check
   double _dragOffset = 0.0; // Variable to track the drag offset
+  bool _isTranslationMenuVisible =
+      false; // Track visibility of translation menu
 
   @override
   void initState() {
@@ -481,6 +483,8 @@ class _ChatScreenState extends State<ChatScreen> {
                                   setState(() {
                                     _dragOffset += details
                                         .delta.dx; // Move left for sender
+                                    _isTranslationMenuVisible =
+                                        true; // Show the menu when dragging starts
                                   });
                                 }
                               } else {
@@ -489,6 +493,8 @@ class _ChatScreenState extends State<ChatScreen> {
                                   setState(() {
                                     _dragOffset += details
                                         .delta.dx; // Move right for receiver
+                                    _isTranslationMenuVisible =
+                                        true; // Show the menu when dragging starts
                                   });
                                 }
                               }
@@ -741,6 +747,46 @@ class _ChatScreenState extends State<ChatScreen> {
               },
             ),
           ),
+          // Show translation dropdown and cancel button if visible
+          if (_isTranslationMenuVisible) ...[
+            Padding(
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 6.0, vertical: 8.0),
+              child: ConstrainedBox(
+                constraints:
+                    BoxConstraints(maxWidth: MediaQuery.of(context).size.width),
+                child: Row(
+                  children: [
+                    Flexible(
+                      child: DropdownButton<String>(
+                        value: selectedLanguage,
+                        isExpanded: true,
+                        items: supportedLanguages.keys.map((String language) {
+                          return DropdownMenuItem<String>(
+                            value: language,
+                            child: Text(language),
+                          );
+                        }).toList(),
+                        onChanged: (String? newValue) {
+                          setState(() {
+                            selectedLanguage = newValue!;
+                          });
+                        },
+                      ),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.cancel),
+                      onPressed: () {
+                        setState(() {
+                          _isTranslationMenuVisible = false; // Hide the menu
+                        });
+                      },
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 6.0, vertical: 8.0),
             child: ConstrainedBox(
@@ -748,24 +794,6 @@ class _ChatScreenState extends State<ChatScreen> {
                   BoxConstraints(maxWidth: MediaQuery.of(context).size.width),
               child: Column(
                 children: [
-                  Padding(
-                    padding: const EdgeInsets.all(8.0),
-                    child: DropdownButton<String>(
-                      value: selectedLanguage,
-                      isExpanded: true,
-                      items: supportedLanguages.keys.map((String language) {
-                        return DropdownMenuItem<String>(
-                          value: language,
-                          child: Text(language),
-                        );
-                      }).toList(),
-                      onChanged: (String? newValue) {
-                        setState(() {
-                          selectedLanguage = newValue!;
-                        });
-                      },
-                    ),
-                  ),
                   Row(
                     crossAxisAlignment: CrossAxisAlignment.center,
                     mainAxisSize: MainAxisSize
